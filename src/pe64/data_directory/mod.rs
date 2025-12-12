@@ -9,3 +9,6 @@ pub use export::*;
 
 pub mod import;
 pub use import::*;
+
+pub mod reloc;
+pub use reloc::*;
