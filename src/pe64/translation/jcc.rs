@@ -2,6 +2,7 @@ use iced_x86::{Code, Encoder, Instruction, MemoryOperand, Register};
 
 use super::Translation;
 
+#[derive(Clone)]
 pub struct JCCTranslation {
     pub jcc_instruction: iced_x86::Instruction,
     pub branch_target: u64,
@@ -28,22 +29,24 @@ impl JCCTranslation {
     }
 }
 
-impl Translation for JCCTranslation {
-    fn resolve(&self) {
+impl JCCTranslation {
+    pub fn resolve(&mut self, ip: u64) {
         // take rva stored in branch target and then replace branch target with absolute address of the reserved memory for that rva's translation
+        self.branch_target = ip;
     }
 
-    fn instruction(&self) -> iced_x86::Instruction {
+    pub fn instruction(&self) -> iced_x86::Instruction {
         self.jcc_instruction
     }
     
-    fn buffer(&mut self) -> Result<Vec<u8>, iced_x86::IcedError> {
+    pub fn buffer(&self) -> Result<Vec<u8>, iced_x86::IcedError> {
         let mut encoder = Encoder::new(64);
 
-        self.jcc_instruction.set_ip(0);
+        let mut jcc_instr = self.jcc_instruction.clone();
+        jcc_instr.set_ip(0);
 
         let mut skip_instruction = Instruction::with_branch(Code::Jmp_rel8_64, 0)?;
-        skip_instruction.set_ip(self.jcc_instruction.ip() + self.get_instruction_size(&self.jcc_instruction)?);
+        skip_instruction.set_ip(jcc_instr.ip() + self.get_instruction_size(&jcc_instr)?);
 
         let mut branch_instruction = Instruction::with1(Code::Jmp_rm64, MemoryOperand::new(Register::RIP, Register::None, 1, 0, 4, false, Register::None))?;
         branch_instruction.set_ip(skip_instruction.ip() + self.get_instruction_size(&skip_instruction)?);
@@ -54,11 +57,15 @@ impl Translation for JCCTranslation {
 
         skip_instruction.set_near_branch64(branch_instruction.ip() + branch_instruction_size + std::mem::size_of_val(&self.branch_target) as u64);
 
-        self.jcc_instruction.set_near_branch64(branch_instruction.ip());
+        jcc_instr.set_near_branch64(branch_instruction.ip());
 
-        encoder.encode(&self.jcc_instruction, self.jcc_instruction.ip())?;
+        encoder.encode(&jcc_instr, jcc_instr.ip())?;
         encoder.encode(&skip_instruction, skip_instruction.ip())?;
         encoder.encode(&branch_instruction, branch_instruction.ip())?;
+
+        //println!("{}", &jcc_instr);
+        //println!("{}", &skip_instruction);
+        //println!("{}", &branch_instruction);
         
         Ok (
             [ encoder.take_buffer(), self.branch_target.to_le_bytes().to_vec() ].concat()

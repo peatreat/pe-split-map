@@ -1,48 +1,14 @@
+#![allow(warnings)]
+
 mod pe64;
 
-use std::collections::HashMap;
+use std::{cell::RefCell, collections::HashMap};
 
 use pe64::PE64;
-use iced_x86::{self, Decoder};
+use iced_x86::{self, Decoder, Mnemonic, OpKind};
+use rand::{seq::SliceRandom, thread_rng};
 
-use crate::pe64::data_directory::{DebugDirectory, ExceptionDirectory, ExportDirectory, ImportDirectory, RelocDirectory, reloc};
-
-#[derive(Copy, Clone)]
-struct Symbol {
-    max_operation_size: u32,
-    is_ptr_reference: bool,
-    is_directory_symbol: bool,
-}
-
-impl Symbol {
-    pub fn update_or_insert(
-        symbols: &mut HashMap<usize, Symbol>,
-        rva: usize,
-        operation_size: u32,
-        is_ptr_reference: bool,
-        is_directory_symbol: bool,
-    ) {
-        symbols.entry(rva)
-            .and_modify(|symbol| {
-                if operation_size > symbol.max_operation_size {
-                    symbol.max_operation_size = operation_size;
-                }
-
-                if is_ptr_reference {
-                    symbol.is_ptr_reference = true;
-                }
-
-                if is_directory_symbol {
-                    symbol.is_directory_symbol = true;
-                }
-            })
-            .or_insert_with(|| Symbol {
-                max_operation_size: operation_size,
-                is_ptr_reference,
-                is_directory_symbol,
-            });
-    }
-}
+use crate::pe64::{symbols::{get_symbol, split_symbols}, translation::{self, Translation}};
 
 fn main() {
     /*
@@ -76,302 +42,195 @@ fn main() {
             but if it's a non-ptr ref that we are 100% sure of the size (reloc ref sym, or data directory symbols), then split symbol there
     */
 
-    let pe = PE64::new("test.dll").unwrap();
+    let pe = PE64::new("kmd.dll").unwrap();
 
-    let mut symbols: HashMap<usize, Symbol> = HashMap::new();
+    let sym = split_symbols(&pe);
 
-    pe.iter_find_section(|section| {
-        println!("section: {}, raw size: {:p}, virt size: {:p}", section.name, section._raw.len() as *const usize, section.virtual_size as *const usize);
+    let mut translations = pe.get_translations();
 
-        if section.is_executable() {
-            let mut decoder = Decoder::new(64, section._raw, iced_x86::DecoderOptions::NONE);
+    //for i in 0..32 {
+    //    println!("{:?}", translations[i].buffer().unwrap());
+    //    println!("{}", translations[i].instruction());
+    //}
+    let mut raw_allocations = Vec::new();
 
-            //decoder.set_ip(pe.image_base() + section.virtual_address as u64);
+    pub struct Allocation<'a> {
+        pub address: u64,
+        pub size: u32,
+        pub buffer: Vec<u8>,
+        pub reservations: Vec<Reservation<'a>>,
+    }
 
-            while decoder.can_decode() {
-                let instruction = decoder.decode();
+    impl Allocation<'_> {
+        pub fn free_space(&mut self, size: u64) -> Option<(&mut Self, u64)> {
+            let free_address = self.reservations.last().map_or(self.address, |x| x.address + x.buffer_size as u64);
 
-                if instruction.is_ip_rel_memory_operand() {
-                    println!("{:p} | {:p}", instruction.ip() as *const usize, instruction.ip_rel_memory_address() as *const usize);
-                    let operand_section = pe.iter_find_section(|s| s.contains_rva(section.virtual_address + instruction.ip_rel_memory_address() as usize));
-                    
-                    if let Some(operand_section) = operand_section {
-                        if operand_section.is_executable() {
-                            // if operand referenced is in an executable section, skip symbol storage
-                            continue;
-                        }
-
-                        let operand_size = instruction.memory_size().size();
-                        let is_lea_instruction = instruction.mnemonic() == iced_x86::Mnemonic::Lea;
-
-                        // update if already exists with larger size else insert new
-                        Symbol::update_or_insert(
-                            &mut symbols,
-                            section.virtual_address + instruction.ip_rel_memory_address() as usize,
-                            operand_size as u32,
-                            is_lea_instruction,
-                            false,
-                        );
-                    }
-                    //println!("instruction: {} | rva: {:p} | symbol rva: {:p} | size: {:?}", instruction, (section.virtual_address as u64 + instruction.ip()) as *const usize, (section.virtual_address as u64 + instruction.ip_rel_memory_address()) as *const usize, instruction.memory_size().size());
-                }
+            if free_address + size >= self.address + self.size as u64 {
+                None
             }
-
-            return true;
-        }
-
-        false
-    });
-
-    DebugDirectory::get_debug_directories(&pe).iter().for_each(|debug_dir| {
-        Symbol::update_or_insert(
-            &mut symbols,
-            debug_dir.dir_rva,
-            debug_dir.dir_size as u32,
-            false,
-            true,
-        );
-
-        Symbol::update_or_insert(
-            &mut symbols,
-            debug_dir.data_rva,
-            debug_dir.data_size as u32,
-            false,
-            true,
-        );
-
-        //println!("debug dir rva: {:p} | size: 0x{:X} ", (debug_dir.dir_rva as *const usize), debug_dir.dir_size);
-        //println!("debug data rva: {:p} | size: 0x{:X} ", (debug_dir.data_rva as *const usize), debug_dir.data_size);
-    });
-
-    ExceptionDirectory::get_unwind_blocks(&pe).iter().for_each(|unwind_block| {
-        Symbol::update_or_insert(
-            &mut symbols,
-            unwind_block.rva,
-            unwind_block.size as u32,
-            false,
-            true,
-        );
-
-        //println!("unwind block rva: {:p} | size: 0x{:X} ", (unwind_block.rva as *const usize), unwind_block.size);
-    });
-
-    if let Some(export_dir) = ExportDirectory::get_export_directory(&pe) {
-        Symbol::update_or_insert(
-            &mut symbols,
-            export_dir.rva,
-            export_dir.size as u32,
-            false,
-            true,
-        );
-
-        println!("export dir rva: {:p} | size: 0x{:X} ", (export_dir.rva as *const usize), export_dir.size);
-    };
-
-    if let Some(import_dir) = ImportDirectory::get_import_directory(&pe) {
-        Symbol::update_or_insert(
-            &mut symbols,
-            import_dir.dir_rva,
-            import_dir.dir_size as u32,
-            false,
-            true,
-        );
-
-        println!("import dir rva: {:p} | size: 0x{:X} ", (import_dir.dir_rva as *const usize), import_dir.dir_size);
-
-        if let Some((dll_name_rva, dll_name_size)) = import_dir.dll_name_rva_and_size {
-            Symbol::update_or_insert(
-                &mut symbols,
-                dll_name_rva,
-                dll_name_size as u32,
-                false,
-            true,
-            );
-
-            println!("import dll name rva: {:p} | size: 0x{:X} ", (dll_name_rva as *const usize), dll_name_size);
-        }
-
-        import_dir.thunks.iter().for_each(|thunk| {
-            Symbol::update_or_insert(
-                &mut symbols,
-                thunk.rva,
-                thunk.size as u32,
-                false,
-            true,
-            );
-            
-            println!("import thunk rva: {:p} | size: 0x{:X} ", (thunk.rva as *const usize), thunk.size);
-
-            if let Some((name_rva, name_size)) = thunk.name_rva_and_size {
-                Symbol::update_or_insert(
-                    &mut symbols,
-                    name_rva,
-                    name_size as u32,
-                    false,
-            true,
-                );
-
-                println!("import thunk name rva: {:p} | size: 0x{:X} ", (name_rva as *const usize), name_size);
+            else {
+                Some((self, free_address))
             }
+        }
+    }
+
+    pub struct Reservation<'a> {
+        pub rva: u32,
+        pub buffer_index: usize,
+        pub buffer_size: usize,
+        //pub ip: u64,
+        pub address: u64,
+        pub size: u32,
+        pub translation: Vec<(u32, &'a mut Translation)>,
+        pub translation_size: u32,
+    }
+
+    // allocate memory segments, create reservation table
+    for i in 0..4 {
+        let mut alloc = Vec::new();
+        const ALLOC_SIZE: usize = 0x1000;
+        alloc.reserve(ALLOC_SIZE);
+        raw_allocations.push( Allocation {
+            address: i * ALLOC_SIZE as u64,
+            size: ALLOC_SIZE as _,
+            buffer: alloc,
+            reservations: Vec::<Reservation>::new(),
         });
     }
 
-    if let Some(reloc_symbols) = RelocDirectory::get_reloc_symbols(&pe) {
-        // for relocation symbols, merge symbols that are <= 0x10 bytes apart into one symbol so vtables don't get split up
+    // sort by address
+    raw_allocations.sort_by_key(|x| x.address);
 
-        if !reloc_symbols.is_empty() {
-            let mut reloc_symbols = reloc_symbols.into_iter().collect::<Vec<_>>();
-            reloc_symbols.sort_by_key(|s| s.rva);
+    const MAX_BLOCK_SIZE: usize = 18;
 
-            let mut merged_reloc_symbols = Vec::new();
+    //translations.shuffle(&mut thread_rng());
 
-            merged_reloc_symbols.push(reloc_symbols[0].clone());
-
-            for i in 1..reloc_symbols.len() {
-                let last_symbol = merged_reloc_symbols.last_mut().unwrap();
-                let current_symbol = &reloc_symbols[i];
-
-                if current_symbol.size.is_none() || last_symbol.size.is_none() {
-                    merged_reloc_symbols.push(current_symbol.clone());
-                    continue;
-                }
-
-                if current_symbol.rva <= last_symbol.rva + last_symbol.size.unwrap_or(0) + 0x10 {
-                    // merge symbols by updating size
-                    let new_size = (current_symbol.rva + current_symbol.size.unwrap_or(0)) - last_symbol.rva;
-                    last_symbol.size = Some(new_size);
-                } else {
-                    merged_reloc_symbols.push(current_symbol.clone());
-                }
-            }
-
-            for reloc_symbol in merged_reloc_symbols {
-                let symbol_section = pe.iter_find_section(|s| s.contains_rva(reloc_symbol.rva)).unwrap();
-
-                if symbol_section.is_executable() {
-                    // if relocation is in an executable section, skip symbol storage
-                    continue;
-                }
-
-                Symbol::update_or_insert(
-                    &mut symbols,
-                    reloc_symbol.rva,
-                    reloc_symbol.size.unwrap_or(0) as u32,
-                    reloc_symbol.size.is_none(),
-            true,
-                );
-
-                println!("reloc symbol rva: {:p} | size: {:?}", (reloc_symbol.rva as *const usize), reloc_symbol.size);
-            }
-        }
-    }
-
-    let mut sorted_symbols = symbols.iter().map(|(key, value)| (*key, *value)).collect::<Vec<_>>();
-    sorted_symbols.sort_by_key(| (k, _) | *k);
-
-    // update ptr reference symbols to have size = next_symbol_rva - current_symbol_rva if larger than current size, but clamp to section size
-    for i in 0..sorted_symbols.len() - 1 {
-        let next_rva = sorted_symbols[i + 1].0;
-        let (current_rva, current_symbol) = &mut sorted_symbols[i];
-
-        if current_symbol.is_ptr_reference {
-            let symbol_section = pe.iter_find_section(|s| s.contains_rva(*current_rva)).unwrap();
-            let section_end_rva = symbol_section.virtual_address + symbol_section.virtual_size;
-
-            let calculated_size = next_rva.saturating_sub(*current_rva);
-            let new_size = calculated_size.min(section_end_rva.saturating_sub(*current_rva));
-
-            if new_size as u32 > current_symbol.max_operation_size {
-                sorted_symbols[i].1.max_operation_size = new_size as u32;
-            }
-        }
-    }
-
-    // update last if is ptr reference to section end
-    if let Some((last_rva, last_symbol)) = sorted_symbols.last_mut() {
-        if last_symbol.is_ptr_reference {
-            let symbol_section = pe.iter_find_section(|s| s.contains_rva(*last_rva)).unwrap();
-            let section_end_rva = symbol_section.virtual_address + symbol_section.virtual_size;
-
-            let calculated_size = section_end_rva.saturating_sub(*last_rva);
-
-            last_symbol.max_operation_size = calculated_size as u32;
-        }
-    }
-
-    // merge overlapping symbols
-    // if cur rva is between last rva and last rva + size, update last size to max(last size, cur rva + cur size - last rva), else add new symbol to merged list
-    let mut merged_symbols: Vec<(usize, Symbol)> = Vec::new();
-
-    for (rva, symbol) in sorted_symbols {
-        if let Some((last_rva, last_symbol)) = merged_symbols.last_mut() {
-            if rva >= *last_rva && rva < (*last_rva + last_symbol.max_operation_size as usize) {
-                // overlapping, update size
-                let new_size = (rva + symbol.max_operation_size as usize).saturating_sub(*last_rva);
-                if new_size as u32 > last_symbol.max_operation_size {
-                    last_symbol.max_operation_size = new_size as u32;
-                }
-
-                last_symbol.is_ptr_reference |= symbol.is_ptr_reference;
-            } else {
-                // non-overlapping, add new symbol
-                merged_symbols.push((rva, symbol));
-            }
-        } else {
-            // first symbol, add directly
-            merged_symbols.push((rva, symbol));
-        }
-    }
-
-    // for all contiguous symbols after a ptr ref symbol, merge the ptr ref symbol to cover all contiguous symbols that are not ptr ref symbols
-    let mut final_symbols: Vec<(usize, Symbol)> = Vec::new();
+    // allocate space for translations
     let mut i = 0;
-    while i < merged_symbols.len() {
-        let (rva, symbol) = merged_symbols[i];
+    let translations_len = translations.len();
+    while i < translations_len {
+        let mut total_size = 0;
+        let mut j = 0;
 
-        if symbol.is_ptr_reference {
-            let mut combined_size = symbol.max_operation_size as usize;
-            let mut j = i + 1;
+        let mut total_bytes = Vec::new();
+        let mut total_translations: Vec<(u32, &mut Translation)> = Vec::new();
+        let mut ip = 0;
 
-            while j < merged_symbols.len() {
-                let (next_rva, next_symbol) = merged_symbols[j];
+        while total_size < MAX_BLOCK_SIZE && i + j < translations_len {
+            let translation = &mut translations[i + j];
 
-                if !next_symbol.is_ptr_reference && !next_symbol.is_directory_symbol/* && next_rva == rva + combined_size*/ {
-                    //combined_size = next_symbol.max_operation_size as usize;
-                    j += 1;
-                }
-                /*else if next_symbol.is_ptr_reference {
-                    combined_size += next_rva - (rva + combined_size);
-                    break;
-                }*/
-                else {
-                    combined_size = next_rva - rva;
-                    break;
-                }
+            if ip == 0 && j == 0 {
+                ip = translation.rva();
             }
 
-            if j == merged_symbols.len() {
-                // reached end, extend to last symbol
-                let (last_rva, last_symbol) = merged_symbols[j - 1];
-                combined_size = (last_rva + last_symbol.max_operation_size as usize) - rva;
+            total_translations.push((translation.rva(), unsafe { (translation as *mut Translation).as_mut().unwrap() }));
+            
+            let mut bytes = translation.buffer().expect("Failed to get translation buffer");
+
+            if total_size + bytes.len() > MAX_BLOCK_SIZE {
+                break;
             }
 
-            final_symbols.push((rva, Symbol {
-                max_operation_size: combined_size as u32,
-                is_ptr_reference: true,
-                is_directory_symbol: symbol.is_directory_symbol,
-            }));
+            total_size += bytes.len();
+            total_bytes.append(&mut bytes);
+            j += 1;
+        }
 
-            i = j;
-        } else {
-            final_symbols.push((rva, symbol));
-            i += 1;
+        const JMP_RIP: [u8; 14] = [0xFF, 0x25, 0x00, 0x00, 0x00, 0x00, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC];
+
+        let total_size_with_jmp_rip = ((total_size as u64 + JMP_RIP.len() as u64) + 0xF) & !0xF;
+
+        let mut free_space = None;
+        for alloc in &mut raw_allocations {
+            let maybe_free_space = alloc.free_space((total_size  + JMP_RIP.len()) as _);
+            if maybe_free_space.is_some() {
+                free_space = maybe_free_space;
+                break;
+            }
+        }
+
+        let (free_base, free_space) = free_space.expect("Failed to allocate space");
+        let offset_from_base = free_space - free_base.address;
+
+        //println!("{:X} {free_space:X} {offset_from_base:X}", free_base.address);
+
+        let mut bytes = unsafe { Box::<[u8]>::new_zeroed_slice(total_size_with_jmp_rip as _).assume_init() };
+        bytes[..total_bytes.len()].copy_from_slice(&total_bytes);
+        
+        bytes[total_size..(total_size + JMP_RIP.len())].copy_from_slice(&JMP_RIP);
+        //unsafe { (bytes.as_mut_ptr().add(total_size + 6) as *mut u64).write_unaligned(free_space + JMP_RIP.len() as u64 + total_size as u64); };
+
+        let buffer_index = free_base.buffer.len();
+        free_base.buffer.extend_from_slice(&bytes);
+        free_base.reservations.push(Reservation {
+            rva: ip,
+            buffer_index,
+            buffer_size: total_size_with_jmp_rip as _,
+            address: free_space,
+            size: total_size as _,
+            translation: total_translations,
+            translation_size: total_size as _,
+        });
+        
+        i += j;
+    }
+
+    for alloc_i in 0..raw_allocations.len() {
+        let alloc = &raw_allocations[alloc_i];
+///
+        for reservation_i in 0..alloc.reservations.len() {
+            let reservation = &alloc.reservations[reservation_i];
+
+            for translation_i in 0..reservation.translation.len() {
+                let (rva, translation) = &reservation.translation[translation_i];
+                //println!("{rva:X}");
+
+                match translation {
+                    Translation::Default(default_translation) => {},
+                    Translation::Jcc(jcc_translation) => {
+                        //jcc_translation.resolve(ip);
+                        let reservation_at_address = alloc.reservations.iter().find(|r| (r.rva..(r.rva + r.size)).contains(&rva)).unwrap();
+                        let reservation_offset = rva - reservation_at_address.rva;
+                        //let translation = pe.find_first_translation_rva(&translations, jcc_translation.branch_target as _).unwrap();
+                        let (translation_alloc, reservation_for_translation, (res_rva, reservation_with_translation)) = raw_allocations.iter().find_map(|alloc| alloc.reservations.iter().find_map(|r| 
+                            if let Some(translation) = r.translation.iter().find(|x| {
+                                //println!("{:X}", x.0);
+                                x.0 == jcc_translation.branch_target as _
+                            }) {
+                                Some((alloc, r, translation))
+                            }
+                            else {
+                                None
+                            }
+                        )).unwrap();
+                        //let translation = translations.iter().find(|t| t as *const _ as usize == *reservation_with_translation  as *const _ as usize);
+                        
+//
+                        //if let Some((reservation_for_translation, (res_rva, reservation_with_translation))) = reservation_with_translation {
+                        let mut jcc_translation = jcc_translation.clone();
+                        let new_ip = reservation_for_translation.address + reservation_for_translation.buffer_index as u64;
+                        let offset_from_reservation = res_rva - reservation_for_translation.rva;
+                        let new_address = translation_alloc.address + reservation_for_translation.buffer_index as u64 + reservation_offset as u64;
+                        jcc_translation.resolve(new_address);
+                        let buffer = jcc_translation.buffer().unwrap();
+                        let alloc = unsafe { (alloc as *const Allocation as *mut Allocation).as_mut().unwrap() };
+                        //alloc.buffer[(reservation.buffer_index)..(reservation.buffer_index +buffer.len())].copy_from_slice(&buffer);
+                        //let x = reservation_for_translation.rva + reservation_for_translation.;
+//
+                        //println!("{reservation_offset:X} {offset_from_reservation:X} {new_address:X} {:X} {:X} {:X}", res_rva, reservation_for_translation.buffer_index, reservation_for_translation.rva);
+                    },
+                    Translation::Control(control_translation) => {},
+                    Translation::Relative(relative_translation) => {},
+                }
+            }
         }
     }
 
-    for (rva, symbol) in final_symbols {
-        //println!("symbol rva: {:p} | end rva: {:p}", (rva as *const usize), (rva + symbol.max_operation_size as usize) as *const usize);
+    let mut total_bytes = Vec::new();
+    for alloc in &mut raw_allocations {
+        //println!("{:X}", alloc.buffer.len());
+        total_bytes.append(&mut alloc.buffer);
     }
 
-    pe.get_translations();
+    std::fs::write("out.bin", total_bytes).expect("Failed to write output to file!");
 }

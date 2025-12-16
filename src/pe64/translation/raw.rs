@@ -2,20 +2,21 @@ use iced_x86::Instruction;
 
 use super::Translation;
 
+#[derive(Clone)]
 pub struct RawTranslation {
     pub buffer: Vec<u8>,
 }
 
-impl Translation for RawTranslation {
-    fn resolve(&self) {
+impl RawTranslation {
+    pub fn resolve(&mut self, ip: u64) {
         // Implementation for resolving the relative translation
     }
 
-    fn instruction(&self) -> iced_x86::Instruction {
+    pub fn instruction(&self) -> iced_x86::Instruction {
         Instruction::new()
     }
     
-    fn buffer(&mut self) -> Result<Vec<u8>, iced_x86::IcedError> {
+    pub fn buffer(&self) -> Result<Vec<u8>, iced_x86::IcedError> {
         Ok(self.buffer.clone())
     }
 }

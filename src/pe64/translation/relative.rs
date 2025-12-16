@@ -2,21 +2,23 @@ use iced_x86::Encoder;
 
 use super::Translation;
 
+#[derive(Clone)]
 pub struct RelativeTranslation {
     pub instruction: iced_x86::Instruction,
 }
 
-impl Translation for RelativeTranslation {
-    fn resolve(&self) {
+impl RelativeTranslation {
+    pub fn resolve(&mut self, ip: u64) {
         // 2nd operand should be immediate that contains the original ip_rel_operand() value and in here that immediate gets replaced with the reserved memory address
     }
 
-    fn instruction(&self) -> iced_x86::Instruction {
+    pub fn instruction(&self) -> iced_x86::Instruction {
         self.instruction
     }
     
-    fn buffer(&mut self) -> Result<Vec<u8>, iced_x86::IcedError> {
+    pub fn buffer(&self) -> Result<Vec<u8>, iced_x86::IcedError> {
         let mut encoder = Encoder::new(64);
+        //println!("{}", &self.instruction);
         encoder.encode(&self.instruction, self.instruction.ip())?;
         Ok(encoder.take_buffer())
     }

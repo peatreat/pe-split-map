@@ -1,14 +1,15 @@
 use core::panic;
-use std::{fs, io, mem::{self, offset_of}};
+use std::{f32::consts::E, fs, io, mem::{self, offset_of}};
 
 use iced_x86::{Decoder, Encoder, Instruction, code_asm::AsmRegister64};
 use winapi::um::winnt::{CONTEXT_FLOATING_POINT, IMAGE_DOS_HEADER, IMAGE_NT_HEADERS64, IMAGE_NT_OPTIONAL_HDR64_MAGIC, IMAGE_SECTION_HEADER};
 
 use crate::pe64::{section::Section, translation::Translation};
 
+pub mod symbols;
 mod section;
 pub mod data_directory;
-mod translation;
+pub mod translation;
 
 pub use crate::iced_x86::*;
 
@@ -138,7 +139,7 @@ impl PE64 {
         None
     }
 
-    fn find_first_translation_rva<'a>(&self, translations: &'a Vec<Box<dyn Translation>>, rva_to_find: u32) -> Option<&'a Box<dyn Translation>> {
+    pub fn find_first_translation_rva<'a>(&self, translations: &'a [Translation], rva_to_find: u32) -> Option<&'a Translation> {
         let mut first = 0;
         let mut last = translations.len() - 1;
         let mut first_occurrence = None;
@@ -174,29 +175,38 @@ impl PE64 {
     block batching can either be None, NumberOfInstructions, or TotalSizeOfInstructions
     */
 
-    fn add_relative_translation(&self, mut instruction: iced_x86::Instruction, translations: &mut Vec<Box<dyn Translation>>) -> Result<(), iced_x86::IcedError> {
+    fn add_relative_translation(&self, mut instruction: iced_x86::Instruction, translations: &mut Vec<Translation>) -> Result<(), iced_x86::IcedError> {
         match instruction.mnemonic() {
             iced_x86::Mnemonic::Lea => {
                 instruction.set_code(Code::Mov_r64_imm64); // change it to: mov r64, imm64
                 instruction.set_op1_kind(OpKind::Immediate64);
                 instruction.set_immediate64(instruction.ip_rel_memory_address());
 
-                translations.push(Box::new(translation::RelativeTranslation {
+                translations.push(translation::Translation::Relative(translation::RelativeTranslation {
                     instruction,
                 }));
             },
             iced_x86::Mnemonic::Jmp | iced_x86::Mnemonic::Call => {
-                //println!("jmp kind: {:?}, instr: {}", instruction.op0_kind(), instruction);
+                //println!(" {:X} jmp kind: {:?}, instr: {}", instruction.ip(), instruction.op0_kind(), instruction);
                 let mut mov_instruction = Instruction::with2(Code::Mov_r64_imm64, Register::R11, instruction.ip_rel_memory_address())?;
                 mov_instruction.set_ip(instruction.ip());
 
                 let mnemonic = if instruction.mnemonic() == iced_x86::Mnemonic::Jmp { Code::Jmp_rm64 } else { Code::Call_rm64 };
 
-                let mut control_instruction = Instruction::with1(mnemonic, MemoryOperand::new(Register::R11, Register::None, 1, 0, 0, false, Register::None))?;
+                let mut control_instruction = if instruction.op0_kind() == OpKind::NearBranch64 {
+                    Instruction::with1(mnemonic, 
+                    Register::R11
+                    )?
+                }
+                else {
+                    Instruction::with1(mnemonic, 
+                    MemoryOperand::new(Register::R11, Register::None, 1, 0, 0, false, Register::None)
+                    )?
+                };
 
                 control_instruction.set_ip(instruction.ip());
 
-                translations.push(Box::new(translation::ControlTranslation {
+                translations.push(translation::Translation::Control(translation::ControlTranslation {
                     mov_instruction,
                     control_instruction,
                 }));
@@ -213,7 +223,7 @@ impl PE64 {
 
                 let jcc_translation = translation::JCCTranslation::new(instruction)?;
 
-                translations.push(Box::new(jcc_translation));
+                translations.push(translation::Translation::Jcc(jcc_translation));
 
                 /*let encoded = jcc_translation.buffer()?;
                 println!("encoded jcc bytes: {:x?}", encoded);
@@ -238,11 +248,11 @@ impl PE64 {
                 mov_instruction.set_ip(instruction.ip());
                 pop_instruction.set_ip(instruction.ip());
 
-                translations.push(Box::new(translation::DefaultTranslation {
+                translations.push(translation::Translation::Default(translation::DefaultTranslation {
                     instruction: push_instruction,
                 }));
 
-                translations.push(Box::new(translation::RelativeTranslation {
+                translations.push(translation::Translation::Relative(translation::RelativeTranslation {
                     instruction: mov_instruction,
                 }));
 
@@ -254,11 +264,11 @@ impl PE64 {
                 instruction.set_memory_index(Register::None);
                 instruction.set_memory_index_scale(1);
 
-                translations.push(Box::new(translation::DefaultTranslation {
+                translations.push(translation::Translation::Default(translation::DefaultTranslation {
                     instruction: instruction,
                 }));
 
-                translations.push(Box::new(translation::DefaultTranslation {
+                translations.push(translation::Translation::Default(translation::DefaultTranslation {
                     instruction: pop_instruction,
                 }));
 
@@ -279,7 +289,7 @@ impl PE64 {
         Ok(())
     }
 
-    fn add_switch_translation(&self, mut instruction: iced_x86::Instruction, translations: &mut Vec<Box<dyn Translation>>) -> Result<(), iced_x86::IcedError> {
+    fn add_switch_translation(&self, mut instruction: iced_x86::Instruction, translations: &mut Vec<Translation>) -> Result<(), iced_x86::IcedError> {
         if instruction.op_count() != 1 {
             panic!("unexpected number of operands");
         }
@@ -292,7 +302,7 @@ impl PE64 {
 
         match instruction.op0_kind() {
             OpKind::Register => {
-                for translation in translations.iter().rev() {
+                for (i, translation) in translations.iter().enumerate().rev() {
                     if translation.instruction().op_count() != 2
                         || translation.instruction().op0_kind() != OpKind::Register
                         || translation.instruction().op0_register() != instruction.op0_register() {
@@ -311,6 +321,27 @@ impl PE64 {
                         panic!("unexpected instruction that uses jmp's register at {:p}", translation.instruction().ip() as *const usize);
                     }
 
+                    let index_register = translation.instruction().op1_register();
+                    let movsxd = translations[i-1].instruction();
+
+                    if movsxd.mnemonic() != Mnemonic::Movsxd {
+                        panic!("unexpected instruction that uses jmp's register at {:p}", translation.instruction().ip() as *const usize);
+                    }
+
+                    println!("{:?}", movsxd.memory_index());
+
+                    //let mut mov_instruction = Instruction::with2(Code::Mov_r64_imm64, index_register, instruction.near_branch64())?;
+                    //mov_instruction.set_ip(instruction.ip());
+//
+                    //let mut control_instruction = Instruction::with1(Code::Jmp_rm64, index_register)?;
+//
+                    //control_instruction.set_ip(instruction.ip());
+//
+                    //translations.push(Box::new(translation::ControlTranslation {
+                    //    mov_instruction,
+                    //    control_instruction,
+                    //}));
+
                     todo!("implement jump table support by getting index register from ADD instruction");
                 }
 
@@ -328,7 +359,7 @@ impl PE64 {
 
                 control_instruction.set_ip(instruction.ip());
 
-                translations.push(Box::new(translation::ControlTranslation {
+                translations.push(translation::Translation::Control(translation::ControlTranslation {
                     mov_instruction,
                     control_instruction,
                 }));
@@ -339,11 +370,11 @@ impl PE64 {
         }
     }
 
-    fn is_rel_instruction(&self, instruction: &iced_x86::Instruction) -> bool {
+    pub fn is_rel_instruction(&self, instruction: &iced_x86::Instruction) -> bool {
         instruction.is_ip_rel_memory_operand() || instruction.is_jcc_short_or_near()
     }
 
-    pub fn get_translations(&self) -> Vec<Box<dyn Translation>> {
+    pub fn get_translations(&self) -> Vec<Translation> {
         let mut translations = Vec::new();
 
         self.iter_find_section(|section| {
@@ -355,24 +386,60 @@ impl PE64 {
 
             decoder.set_ip(section.virtual_address as u64);
 
+            let mut prev_instr: [Option<Instruction>; 3] = [None; 3];
+
             while decoder.can_decode() {                
                 let instruction = decoder.decode();
 
-                if instruction.ip() == 0x27AB1 {
-                    println!("{}, op kind: {:?}, is rel: {}, segment reg: {:?}", instruction, instruction.op0_kind(), instruction.is_ip_rel_memory_operand(), instruction.memory_segment());
+                // jump tables appear in this fashion in binaries compiled with llvm:
+                // lea
+                // movsxd
+                // add
+                // jmp REG
+                let mut found_jumptable = false;
+                if instruction.mnemonic() == iced_x86::Mnemonic::Jmp
+                    && let Some(maybe_lea) = prev_instr[2]
+                    && let Some(maybe_movsxd) = prev_instr[1]
+                    && let Some(maybe_add) = prev_instr[0] {
+                    if maybe_lea.mnemonic() == iced_x86::Mnemonic::Lea
+                        && maybe_movsxd.mnemonic() == iced_x86::Mnemonic::Movsxd
+                        && maybe_add.mnemonic() == iced_x86::Mnemonic::Add {
+                        found_jumptable = true;
+                    }
                 }
 
-                if self.is_rel_instruction(&instruction) {
+                //if instruction.ip() == 0x128C {
+                //    //for instr in prev_instr {
+                //    //    if let Some(instr) = instr {
+                //    //        println!("{instr}");
+                //    //    }
+                //    //}
+                //    println!("{}, op kind: {:?}, is rel: {}, segment reg: {:?}", instruction, instruction.op0_kind(), instruction.is_ip_rel_memory_operand(), instruction.memory_segment());
+                //}
+
+                if self.is_rel_instruction(&instruction) || instruction.op0_kind() == OpKind::NearBranch64 {
                     self.add_relative_translation(instruction, &mut translations).unwrap();
                 } 
-                else if instruction.mnemonic() == iced_x86::Mnemonic::Jmp && instruction.ip() == self.image_base() + 0x27AB1 {
+                else if found_jumptable {
                     self.add_switch_translation(instruction, &mut translations).unwrap();
                 }
                 else {
-                    translations.push(Box::new(translation::DefaultTranslation {
-                        instruction,
-                    }));
+                    if (instruction.code() != Code::Add_rm8_r8
+                        || instruction.memory_base() != Register::RAX
+                        || instruction.op1_register() != Register::AL)
+                        && !instruction.is_invalid()
+                        && instruction.code() != Code::Int3
+                        && instruction.code() != Code::Nop_rm16
+                        && instruction.code() != Code::Nop_rm32
+                        && instruction.code() != Code::Nop_rm64 {
+                        translations.push(translation::Translation::Default(translation::DefaultTranslation {
+                            instruction,
+                        }));
+                    }
                 }
+
+                prev_instr.rotate_right(1);
+                prev_instr[0] = Some(instruction);
             }
 
             false
