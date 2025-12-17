@@ -86,7 +86,7 @@ fn main() {
     }
 
     // allocate memory segments, create reservation table
-    for i in 0..4 {
+    for i in 0..3 {
         let mut alloc = Vec::new();
         const ALLOC_SIZE: usize = 0x1000;
         alloc.reserve(ALLOC_SIZE);
@@ -101,7 +101,7 @@ fn main() {
     // sort by address
     raw_allocations.sort_by_key(|x| x.address);
 
-    const MAX_BLOCK_SIZE: usize = 18;
+    const MAX_BLOCK_SIZE: usize = 32;
 
     //translations.shuffle(&mut thread_rng());
 
@@ -119,17 +119,17 @@ fn main() {
         while total_size < MAX_BLOCK_SIZE && i + j < translations_len {
             let translation = &mut translations[i + j];
 
-            if ip == 0 && j == 0 {
-                ip = translation.rva();
-            }
-
-            total_translations.push((translation.rva(), unsafe { (translation as *mut Translation).as_mut().unwrap() }));
-            
             let mut bytes = translation.buffer().expect("Failed to get translation buffer");
 
             if total_size + bytes.len() > MAX_BLOCK_SIZE {
                 break;
             }
+
+            if ip == 0 && j == 0 {
+                ip = translation.rva();
+            }
+
+            total_translations.push((translation.rva(), unsafe { (translation as *mut Translation).as_mut().unwrap() }));
 
             total_size += bytes.len();
             total_bytes.append(&mut bytes);
@@ -142,7 +142,7 @@ fn main() {
 
         let mut free_space = None;
         for alloc in &mut raw_allocations {
-            let maybe_free_space = alloc.free_space((total_size  + JMP_RIP.len()) as _);
+            let maybe_free_space = alloc.free_space(total_size_with_jmp_rip as _);
             if maybe_free_space.is_some() {
                 free_space = maybe_free_space;
                 break;
@@ -188,36 +188,39 @@ fn main() {
                 match translation {
                     Translation::Default(default_translation) => {},
                     Translation::Jcc(jcc_translation) => {
-                        //jcc_translation.resolve(ip);
-                        let reservation_at_address = alloc.reservations.iter().find(|r| (r.rva..(r.rva + r.size)).contains(&rva)).unwrap();
-                        let reservation_offset = rva - reservation_at_address.rva;
-                        //let translation = pe.find_first_translation_rva(&translations, jcc_translation.branch_target as _).unwrap();
-                        let (translation_alloc, reservation_for_translation, (res_rva, reservation_with_translation)) = raw_allocations.iter().find_map(|alloc| alloc.reservations.iter().find_map(|r| 
-                            if let Some(translation) = r.translation.iter().find(|x| {
-                                //println!("{:X}", x.0);
-                                x.0 == jcc_translation.branch_target as _
-                            }) {
-                                Some((alloc, r, translation))
-                            }
-                            else {
-                                None
-                            }
-                        )).unwrap();
-                        //let translation = translations.iter().find(|t| t as *const _ as usize == *reservation_with_translation  as *const _ as usize);
-                        
-//
-                        //if let Some((reservation_for_translation, (res_rva, reservation_with_translation))) = reservation_with_translation {
-                        let mut jcc_translation = jcc_translation.clone();
-                        let new_ip = reservation_for_translation.address + reservation_for_translation.buffer_index as u64;
-                        let offset_from_reservation = res_rva - reservation_for_translation.rva;
-                        let new_address = translation_alloc.address + reservation_for_translation.buffer_index as u64 + reservation_offset as u64;
-                        jcc_translation.resolve(new_address);
-                        let buffer = jcc_translation.buffer().unwrap();
-                        let alloc = unsafe { (alloc as *const Allocation as *mut Allocation).as_mut().unwrap() };
-                        //alloc.buffer[(reservation.buffer_index)..(reservation.buffer_index +buffer.len())].copy_from_slice(&buffer);
-                        //let x = reservation_for_translation.rva + reservation_for_translation.;
-//
-                        //println!("{reservation_offset:X} {offset_from_reservation:X} {new_address:X} {:X} {:X} {:X}", res_rva, reservation_for_translation.buffer_index, reservation_for_translation.rva);
+                        ////jcc_translation.resolve(ip);
+                        //println!("{rva:X}");
+                        ////let reservation_at_address = alloc.reservations.iter().find(|r| (r.rva..(r.rva + r.buffer_size as u32)).contains(rva)).unwrap();
+                        ////let reservation_offset = rva - reservation_at_address.rva;
+                        //////let translation = pe.find_first_translation_rva(&translations, jcc_translation.branch_target as _).unwrap();
+                        //let (translation_alloc, reservation_for_translation, (res_rva, reservation_with_translation)) = raw_allocations.iter().find_map(|alloc| alloc.reservations.iter().find_map(|r| 
+                        //    if let Some(translation) = r.translation.iter().find(|x| {
+                        //        //println!("{:X}", x.0);
+                        //        x.0 == jcc_translation.branch_target as _
+                        //    }) {
+                        //        Some((alloc, r, translation))
+                        //    }
+                        //    else {
+                        //        None
+                        //    }
+                        //)).unwrap();
+                        //////let translation = translations.iter().find(|t| t as *const _ as usize == *reservation_with_translation  as *const _ as usize);
+                        ////
+//////
+                        //////if let Some((reservation_for_translation, (res_rva, reservation_with_translation))) = reservation_with_translation {
+                        ////let mut jcc_translation = jcc_translation.clone();
+                        ////let new_ip = reservation_for_translation.address + reservation_for_translation.buffer_index as u64;
+                        //let offset_from_reservation = res_rva - reservation_for_translation.rva;
+                        //let new_address = translation_alloc.address + reservation_for_translation.buffer_index as u64 + offset_from_reservation as u64;
+                        ////jcc_translation.resolve(new_address);
+                        ////let buffer = jcc_translation.buffer().unwrap();
+                        ////let alloc = unsafe { (alloc as *const Allocation as *mut Allocation).as_mut().unwrap() };
+                        ////alloc.buffer[(reservation.buffer_index)..(reservation.buffer_index +buffer.len())].copy_from_slice(&buffer);
+                        ////let x = reservation_for_translation.rva + reservation_for_translation.;
+////
+                        ////if translation_i == 0 {
+                        //    println!("{offset_from_reservation:X} {new_address:X} {:X} {:X} {:X} {:X} {:X}", res_rva, reservation_for_translation.buffer_index, reservation_for_translation.rva, jcc_translation.instruction().ip(), translation_i);
+                        ////}
                     },
                     Translation::Control(control_translation) => {},
                     Translation::Relative(relative_translation) => {},

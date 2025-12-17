@@ -386,7 +386,7 @@ impl PE64 {
 
             decoder.set_ip(section.virtual_address as u64);
 
-            let mut prev_instr: [Option<Instruction>; 3] = [None; 3];
+            //let mut prev_instr: [Option<Instruction>; 3] = [None; 3];
 
             while decoder.can_decode() {                
                 let instruction = decoder.decode();
@@ -396,17 +396,17 @@ impl PE64 {
                 // movsxd
                 // add
                 // jmp REG
-                let mut found_jumptable = false;
-                if instruction.mnemonic() == iced_x86::Mnemonic::Jmp
-                    && let Some(maybe_lea) = prev_instr[2]
-                    && let Some(maybe_movsxd) = prev_instr[1]
-                    && let Some(maybe_add) = prev_instr[0] {
-                    if maybe_lea.mnemonic() == iced_x86::Mnemonic::Lea
-                        && maybe_movsxd.mnemonic() == iced_x86::Mnemonic::Movsxd
-                        && maybe_add.mnemonic() == iced_x86::Mnemonic::Add {
-                        found_jumptable = true;
-                    }
-                }
+                //let mut found_jumptable = false;
+                //if instruction.mnemonic() == iced_x86::Mnemonic::Jmp
+                //    && let Some(maybe_lea) = prev_instr[2]
+                //    && let Some(maybe_movsxd) = prev_instr[1]
+                //    && let Some(maybe_add) = prev_instr[0] {
+                //    if maybe_lea.mnemonic() == iced_x86::Mnemonic::Lea
+                //        && maybe_movsxd.mnemonic() == iced_x86::Mnemonic::Movsxd
+                //        && maybe_add.mnemonic() == iced_x86::Mnemonic::Add {
+                //        found_jumptable = true;
+                //    }
+                //}
 
                 //if instruction.ip() == 0x128C {
                 //    //for instr in prev_instr {
@@ -420,7 +420,7 @@ impl PE64 {
                 if self.is_rel_instruction(&instruction) || instruction.op0_kind() == OpKind::NearBranch64 {
                     self.add_relative_translation(instruction, &mut translations).unwrap();
                 } 
-                else if found_jumptable {
+                else if instruction.mnemonic() == iced_x86::Mnemonic::Jmp {
                     self.add_switch_translation(instruction, &mut translations).unwrap();
                 }
                 else {
@@ -438,8 +438,8 @@ impl PE64 {
                     }
                 }
 
-                prev_instr.rotate_right(1);
-                prev_instr[0] = Some(instruction);
+                //prev_instr.rotate_right(1);
+                //prev_instr[0] = Some(instruction);
             }
 
             false
