@@ -4,12 +4,13 @@ use std::{f32::consts::E, fs, io, mem::{self, offset_of}};
 use iced_x86::{Decoder, Encoder, Instruction, code_asm::AsmRegister64};
 use winapi::um::winnt::{CONTEXT_FLOATING_POINT, IMAGE_DOS_HEADER, IMAGE_NT_HEADERS64, IMAGE_NT_OPTIONAL_HDR64_MAGIC, IMAGE_SECTION_HEADER};
 
-use crate::pe64::{section::Section, translation::Translation};
+use crate::pe64::{section::Section, translation::{ControlTranslation, DefaultTranslation, JCCTranslation, RelativeTranslation, Translation}};
 
 pub mod symbols;
 mod section;
 pub mod data_directory;
 pub mod translation;
+pub mod mapper;
 
 pub use crate::iced_x86::*;
 
@@ -79,6 +80,17 @@ impl PE64 {
         Some(unsafe { &*(self._raw.as_ptr().add(offset) as *const T) })
     }
 
+    pub fn get_data_from_rva(&self, rva: usize, size: usize) -> Option<&[u8]> {
+        let offset = self.iter_find_section(|section| section.contains_rva(rva) && rva + size <= section.virtual_address + section._raw.len())
+            .map(|section| {
+                let offset_within_section = rva - section.virtual_address;
+                let section_raw_offset = section._raw.as_ptr() as usize - self._raw.as_ptr() as usize;
+                section_raw_offset + offset_within_section
+            })?;
+
+        Some(&self._raw[offset..offset+size])
+    }
+
     pub fn iter_find_section<F>(&self, mut closure: F) -> Option<Section<'_>>
         where F: FnMut(&Section) -> bool,
     {
@@ -139,28 +151,6 @@ impl PE64 {
         None
     }
 
-    pub fn find_first_translation_rva<'a>(&self, translations: &'a [Translation], rva_to_find: u32) -> Option<&'a Translation> {
-        let mut first = 0;
-        let mut last = translations.len() - 1;
-        let mut first_occurrence = None;
-
-        while first <= last {
-            let mid_index = (first + last) / 2;
-            let cur_rva = translations[mid_index].rva();
-
-            if cur_rva == rva_to_find {
-                first_occurrence = Some(&translations[mid_index]);
-                last = mid_index - 1;
-            } else if cur_rva < rva_to_find {
-                first = mid_index + 1;
-            } else {
-                last = mid_index - 1;
-            }
-        }
-
-        return first_occurrence;
-    }
-
     /*
     reserve for all translations (for executable translations we reserve buffer size + far jump size) (for symbol translations we reserve buffer size)
 
@@ -182,9 +172,7 @@ impl PE64 {
                 instruction.set_op1_kind(OpKind::Immediate64);
                 instruction.set_immediate64(instruction.ip_rel_memory_address());
 
-                translations.push(translation::Translation::Relative(translation::RelativeTranslation {
-                    instruction,
-                }));
+                translations.push(Translation::Relative(RelativeTranslation::new(instruction)));
             },
             iced_x86::Mnemonic::Jmp | iced_x86::Mnemonic::Call => {
                 //println!(" {:X} jmp kind: {:?}, instr: {}", instruction.ip(), instruction.op0_kind(), instruction);
@@ -206,10 +194,7 @@ impl PE64 {
 
                 control_instruction.set_ip(instruction.ip());
 
-                translations.push(translation::Translation::Control(translation::ControlTranslation {
-                    mov_instruction,
-                    control_instruction,
-                }));
+                translations.push(Translation::Control(ControlTranslation::new(mov_instruction, control_instruction)));
             },
             iced_x86::Mnemonic::Jb | iced_x86::Mnemonic::Jbe | iced_x86::Mnemonic::Jcxz | iced_x86::Mnemonic::Jecxz
             | iced_x86::Mnemonic::Jknzd | iced_x86::Mnemonic::Jkzd | iced_x86::Mnemonic::Jl | iced_x86::Mnemonic::Jle
@@ -221,9 +206,7 @@ impl PE64 {
                 //let target = instruction.near_branch64();
                 //println!("short branch before: {}, kind: {:?}", instruction, instruction.op0_kind());
 
-                let jcc_translation = translation::JCCTranslation::new(instruction)?;
-
-                translations.push(translation::Translation::Jcc(jcc_translation));
+                translations.push(Translation::Jcc(JCCTranslation::new(instruction)?));
 
                 /*let encoded = jcc_translation.buffer()?;
                 println!("encoded jcc bytes: {:x?}", encoded);
@@ -248,13 +231,9 @@ impl PE64 {
                 mov_instruction.set_ip(instruction.ip());
                 pop_instruction.set_ip(instruction.ip());
 
-                translations.push(translation::Translation::Default(translation::DefaultTranslation {
-                    instruction: push_instruction,
-                }));
+                translations.push(Translation::Default(DefaultTranslation::new(push_instruction)));
 
-                translations.push(translation::Translation::Relative(translation::RelativeTranslation {
-                    instruction: mov_instruction,
-                }));
+                translations.push(Translation::Relative(RelativeTranslation::new(mov_instruction)));
 
                 //println!("old instr: {}", instruction);
 
@@ -264,14 +243,10 @@ impl PE64 {
                 instruction.set_memory_index(Register::None);
                 instruction.set_memory_index_scale(1);
 
-                translations.push(translation::Translation::Default(translation::DefaultTranslation {
-                    instruction: instruction,
-                }));
+                translations.push(Translation::Default(DefaultTranslation::new(instruction)));
 
-                translations.push(translation::Translation::Default(translation::DefaultTranslation {
-                    instruction: pop_instruction,
-                }));
-
+                translations.push(Translation::Default(DefaultTranslation::new(pop_instruction)));
+                
                 /*for i in (translations.len() - 4)..translations.len() {
                     let encoded = translations[i].buffer()?;
                     let mut decoder = Decoder::new(64, &encoded, iced_x86::DecoderOptions::NONE);
@@ -311,7 +286,7 @@ impl PE64 {
 
                     if translation.instruction().mnemonic() != Mnemonic::Add {
                         // we found a 2 operand instruction where dst operand is current register but it isn't ADD so it can't be a jump table
-                        return Ok(());
+                        break;
                     }
 
                     // from here on out we can assume we are in a jump table
@@ -345,6 +320,8 @@ impl PE64 {
                     todo!("implement jump table support by getting index register from ADD instruction");
                 }
 
+                translations.push(Translation::Default(DefaultTranslation::new(instruction)));
+
                 Ok(())
             },
             OpKind::NearBranch64 => {
@@ -359,10 +336,7 @@ impl PE64 {
 
                 control_instruction.set_ip(instruction.ip());
 
-                translations.push(translation::Translation::Control(translation::ControlTranslation {
-                    mov_instruction,
-                    control_instruction,
-                }));
+                translations.push(Translation::Control(ControlTranslation::new(mov_instruction, control_instruction)));
 
                 Ok(())
             },
@@ -386,7 +360,7 @@ impl PE64 {
 
             decoder.set_ip(section.virtual_address as u64);
 
-            let mut prev_instr: [Option<Instruction>; 3] = [None; 3];
+            //let mut prev_instr: [Option<Instruction>; 3] = [None; 3];
 
             while decoder.can_decode() {                
                 let instruction = decoder.decode();
@@ -396,7 +370,7 @@ impl PE64 {
                 // movsxd
                 // add
                 // jmp REG
-                let mut found_jumptable = false;
+                /*let mut found_jumptable = false;
                 if instruction.mnemonic() == iced_x86::Mnemonic::Jmp
                     && let Some(maybe_lea) = prev_instr[2]
                     && let Some(maybe_movsxd) = prev_instr[1]
@@ -406,7 +380,7 @@ impl PE64 {
                         && maybe_add.mnemonic() == iced_x86::Mnemonic::Add {
                         found_jumptable = true;
                     }
-                }
+                }*/
 
                 //if instruction.ip() == 0x128C {
                 //    //for instr in prev_instr {
@@ -420,7 +394,7 @@ impl PE64 {
                 if self.is_rel_instruction(&instruction) || instruction.op0_kind() == OpKind::NearBranch64 {
                     self.add_relative_translation(instruction, &mut translations).unwrap();
                 } 
-                else if found_jumptable {
+                else if instruction.mnemonic() == iced_x86::Mnemonic::Jmp {
                     self.add_switch_translation(instruction, &mut translations).unwrap();
                 }
                 else {
@@ -432,14 +406,12 @@ impl PE64 {
                         && instruction.code() != Code::Nop_rm16
                         && instruction.code() != Code::Nop_rm32
                         && instruction.code() != Code::Nop_rm64 {
-                        translations.push(translation::Translation::Default(translation::DefaultTranslation {
-                            instruction,
-                        }));
+                        translations.push(Translation::Default(DefaultTranslation::new(instruction)));
                     }
                 }
 
-                prev_instr.rotate_right(1);
-                prev_instr[0] = Some(instruction);
+                //prev_instr.rotate_right(1);
+                //prev_instr[0] = Some(instruction);
             }
 
             false

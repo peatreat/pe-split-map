@@ -1,6 +1,7 @@
 #![allow(warnings)]
 
 mod pe64;
+mod heap;
 
 use std::{cell::RefCell, collections::HashMap};
 
@@ -8,7 +9,7 @@ use pe64::PE64;
 use iced_x86::{self, Decoder, Mnemonic, OpKind};
 use rand::{seq::SliceRandom, thread_rng};
 
-use crate::pe64::{symbols::{get_symbol, split_symbols}, translation::{self, Translation}};
+use crate::{heap::HeapPage, pe64::{mapper::{Mapper, TranslationBlockSize}, symbols::{get_symbol, split_symbols}, translation::{self, Translation}}};
 
 fn main() {
     /*
@@ -42,11 +43,33 @@ fn main() {
             but if it's a non-ptr ref that we are 100% sure of the size (reloc ref sym, or data directory symbols), then split symbol there
     */
 
-    let pe = PE64::new("kmd.dll").unwrap();
+    let pe = PE64::new("test.dll").unwrap();
 
     let sym = split_symbols(&pe);
 
     let mut translations = pe.get_translations();
+
+    let mut code_pages = Vec::new();
+    let mut symbol_pages = Vec::new();
+
+    for i in 0..10 {
+        code_pages.push(HeapPage::new(i * 0x1000, i * 0x1000 + 0x1000));
+        symbol_pages.push(HeapPage::new(0x200000 + i * 0x1000, 0x200000 + i * 0x1000 + 0x1000));
+    }
+
+    let mut code_heap = heap::Heap::new(code_pages);
+    let mut symbol_heap = heap::Heap::new(symbol_pages);
+
+    let mapped_blocks = Mapper::map(&pe, &mut code_heap, &mut symbol_heap, &mut translations, &sym, TranslationBlockSize::MaxByteSize(32), true);
+
+    if let Some(blocks) = mapped_blocks {
+        for block in blocks {
+            println!("address: {}, data: {:02X?}", block.address, block.data);
+        }
+        return;
+    }
+
+    panic!();
 
     //for i in 0..32 {
     //    println!("{:?}", translations[i].buffer().unwrap());
@@ -75,13 +98,13 @@ fn main() {
     }
 
     pub struct Reservation<'a> {
-        pub rva: u32,
+        pub rva: u64,
         pub buffer_index: usize,
         pub buffer_size: usize,
         //pub ip: u64,
         pub address: u64,
-        pub size: u32,
-        pub translation: Vec<(u32, &'a mut Translation)>,
+        pub size: u64,
+        pub translation: Vec<(u64, &'a mut Translation)>,
         pub translation_size: u32,
     }
 
@@ -113,7 +136,7 @@ fn main() {
         let mut j = 0;
 
         let mut total_bytes = Vec::new();
-        let mut total_translations: Vec<(u32, &mut Translation)> = Vec::new();
+        let mut total_translations: Vec<(u64, &mut Translation)> = Vec::new();
         let mut ip = 0;
 
         while total_size < MAX_BLOCK_SIZE && i + j < translations_len {

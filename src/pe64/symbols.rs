@@ -10,6 +10,7 @@ pub struct Symbol {
     pub max_operation_size: u32,
     pub is_ptr_reference: bool,
     pub is_directory_symbol: bool,
+    pub should_ignore: bool,
 }
 
 pub fn get_symbol(symbol: &[(usize, Symbol)], rva: usize) -> Option<&(usize, Symbol)> {
@@ -23,6 +24,7 @@ impl Symbol {
         operation_size: u32,
         is_ptr_reference: bool,
         is_directory_symbol: bool,
+        should_ignore: bool,
     ) {
         symbols.entry(rva)
             .and_modify(|symbol| {
@@ -42,6 +44,7 @@ impl Symbol {
                 max_operation_size: operation_size,
                 is_ptr_reference,
                 is_directory_symbol,
+                should_ignore,
             });
     }
 }
@@ -80,6 +83,7 @@ pub fn split_symbols(pe: &PE64) -> Vec<(usize, Symbol)> {
                             operand_size as u32,
                             is_lea_instruction,
                             false,
+                            false,
                         );
                     }
                     //println!("instruction: {} | rva: {:p} | symbol rva: {:p} | size: {:?}", instruction, (section.virtual_address as u64 + instruction.ip()) as *const usize, (section.virtual_address as u64 + instruction.ip_rel_memory_address()) as *const usize, instruction.memory_size().size());
@@ -99,6 +103,7 @@ pub fn split_symbols(pe: &PE64) -> Vec<(usize, Symbol)> {
             debug_dir.dir_size as u32,
             false,
             true,
+            true,
         );
 
         Symbol::update_or_insert(
@@ -106,6 +111,7 @@ pub fn split_symbols(pe: &PE64) -> Vec<(usize, Symbol)> {
             debug_dir.data_rva,
             debug_dir.data_size as u32,
             false,
+            true,
             true,
         );
 
@@ -120,6 +126,7 @@ pub fn split_symbols(pe: &PE64) -> Vec<(usize, Symbol)> {
             unwind_block.size as u32,
             false,
             true,
+            true,
         );
 
         //println!("unwind block rva: {:p} | size: 0x{:X} ", (unwind_block.rva as *const usize), unwind_block.size);
@@ -131,6 +138,7 @@ pub fn split_symbols(pe: &PE64) -> Vec<(usize, Symbol)> {
             export_dir.rva,
             export_dir.size as u32,
             false,
+            true,
             true,
         );
 
@@ -144,6 +152,7 @@ pub fn split_symbols(pe: &PE64) -> Vec<(usize, Symbol)> {
             import_dir.dir_size as u32,
             false,
             true,
+            true,
         );
 
         println!("import dir rva: {:p} | size: 0x{:X} ", (import_dir.dir_rva as *const usize), import_dir.dir_size);
@@ -154,6 +163,7 @@ pub fn split_symbols(pe: &PE64) -> Vec<(usize, Symbol)> {
                 dll_name_rva,
                 dll_name_size as u32,
                 false,
+                true,
                 true,
             );
 
@@ -167,6 +177,7 @@ pub fn split_symbols(pe: &PE64) -> Vec<(usize, Symbol)> {
                 thunk.size as u32,
                 false,
                 true,
+                false,
             );
             
             println!("import thunk rva: {:p} | size: 0x{:X} ", (thunk.rva as *const usize), thunk.size);
@@ -177,6 +188,7 @@ pub fn split_symbols(pe: &PE64) -> Vec<(usize, Symbol)> {
                     name_rva,
                     name_size as u32,
                     false,
+                    true,
                     true,
                 );
 
@@ -228,6 +240,7 @@ pub fn split_symbols(pe: &PE64) -> Vec<(usize, Symbol)> {
                     reloc_symbol.size.unwrap_or(0) as u32,
                     reloc_symbol.size.is_none(),
                     true,
+                    false,
                 );
 
                 println!("reloc symbol rva: {:p} | size: {:?}", (reloc_symbol.rva as *const usize), reloc_symbol.size);
@@ -301,12 +314,19 @@ pub fn split_symbols(pe: &PE64) -> Vec<(usize, Symbol)> {
         if symbol.is_ptr_reference {
             let mut combined_size = symbol.max_operation_size as usize;
             let mut j = i + 1;
+            let mut should_ignore = symbol.should_ignore;
+            let symbol_section = pe.iter_find_section(|s| s.contains_rva(rva)).unwrap();
 
             while j < merged_symbols.len() {
                 let (next_rva, next_symbol) = merged_symbols[j];
+                let next_sym_section = pe.iter_find_section(|s| s.contains_rva(next_rva)).unwrap();
 
-                if !next_symbol.is_ptr_reference && !next_symbol.is_directory_symbol/* && next_rva == rva + combined_size*/ {
+                if !next_symbol.is_ptr_reference && !next_symbol.is_directory_symbol && symbol_section.virtual_address == next_sym_section.virtual_address /* && next_rva == rva + combined_size*/ {
                     //combined_size = next_symbol.max_operation_size as usize;
+                    if (!next_symbol.should_ignore) {
+                        should_ignore = false;
+                    }
+
                     j += 1;
                 }
                 /*else if next_symbol.is_ptr_reference {
@@ -314,7 +334,7 @@ pub fn split_symbols(pe: &PE64) -> Vec<(usize, Symbol)> {
                     break;
                 }*/
                 else {
-                    combined_size = next_rva - rva;
+                    combined_size = (next_rva - rva).min(symbol_section.virtual_address + symbol_section.virtual_size - rva);
                     break;
                 }
             }
@@ -329,6 +349,7 @@ pub fn split_symbols(pe: &PE64) -> Vec<(usize, Symbol)> {
                 max_operation_size: combined_size as u32,
                 is_ptr_reference: true,
                 is_directory_symbol: symbol.is_directory_symbol,
+                should_ignore: should_ignore,
             }));
 
             i = j;

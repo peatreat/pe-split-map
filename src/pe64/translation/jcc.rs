@@ -4,6 +4,7 @@ use super::Translation;
 
 #[derive(Clone)]
 pub struct JCCTranslation {
+    pub mapped_va: u64,
     pub jcc_instruction: iced_x86::Instruction,
     pub branch_target: u64,
 }
@@ -17,6 +18,7 @@ impl JCCTranslation {
 
         Ok (
             JCCTranslation {
+                mapped_va: 0,
                 jcc_instruction,
                 branch_target,
             }
@@ -30,13 +32,25 @@ impl JCCTranslation {
 }
 
 impl JCCTranslation {
-    pub fn resolve(&mut self, ip: u64) {
+    pub fn resolve(&mut self, rel_ip: u64) {
         // take rva stored in branch target and then replace branch target with absolute address of the reserved memory for that rva's translation
-        self.branch_target = ip;
+        self.branch_target = rel_ip;
+    }
+
+    pub fn rel_op_rva(&self) -> Option<u64> {
+        Some(self.branch_target)
     }
 
     pub fn instruction(&self) -> iced_x86::Instruction {
         self.jcc_instruction
+    }
+
+    pub fn mapped(&self) -> u64 {
+        self.mapped_va
+    }
+
+    pub fn mapped_mut(&mut self) -> &mut u64 {
+        &mut self.mapped_va
     }
     
     pub fn buffer(&self) -> Result<Vec<u8>, iced_x86::IcedError> {
