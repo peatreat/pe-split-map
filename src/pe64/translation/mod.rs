@@ -3,17 +3,21 @@ pub mod raw;
 pub mod control;
 pub mod jcc;
 pub mod block;
+pub mod near;
 
 use iced_x86::{Encoder, Instruction};
 pub use relative::RelativeTranslation;
 pub use control::ControlTranslation;
 pub use jcc::JCCTranslation;
 
+use crate::pe64::{mapper::{MappedBlock, Mapper}, translation::near::NearTranslation};
+
 pub enum Translation {
     Default(DefaultTranslation),
     Jcc(JCCTranslation),
     Control(ControlTranslation),
     Relative(RelativeTranslation),
+    Near(NearTranslation),
 }
 
 impl Translation {
@@ -21,12 +25,13 @@ impl Translation {
         self.instruction().ip()
     }
     
-    pub fn buffer(&self) -> Result<Vec<u8>, iced_x86::IcedError> {
+    pub fn buffer(&self, assume_jumps_are_near: bool) -> Result<Vec<u8>, iced_x86::IcedError> {
         match self {
             Translation::Default(default_translation) => default_translation.buffer(),
-            Translation::Jcc(jcc_translation) => jcc_translation.buffer(),
-            Translation::Control(control_translation) => control_translation.buffer(),
+            Translation::Jcc(jcc_translation) => jcc_translation.buffer(assume_jumps_are_near),
+            Translation::Control(control_translation) => control_translation.buffer(assume_jumps_are_near),
             Translation::Relative(relative_translation) => relative_translation.buffer(),
+            Translation::Near(near_translation) => near_translation.buffer(),
         }
     }
 
@@ -36,6 +41,7 @@ impl Translation {
             Translation::Jcc(jcc_translation) => jcc_translation.resolve(rel_op_ip),
             Translation::Control(control_translation) => control_translation.resolve(rel_op_ip),
             Translation::Relative(relative_translation) => relative_translation.resolve(rel_op_ip),
+            Translation::Near(near_translation) => near_translation.resolve(rel_op_ip),
         }
     }
 
@@ -45,6 +51,7 @@ impl Translation {
             Translation::Jcc(jcc_translation) => jcc_translation.instruction(),
             Translation::Control(control_translation) => control_translation.instruction(),
             Translation::Relative(relative_translation) => relative_translation.instruction(),
+            Translation::Near(near_translation) => near_translation.instruction(),
         }
     }
 
@@ -54,6 +61,7 @@ impl Translation {
             Translation::Jcc(jcc_translation) => jcc_translation.mapped(),
             Translation::Control(control_translation) => control_translation.mapped(),
             Translation::Relative(relative_translation) => relative_translation.mapped(),
+            Translation::Near(near_translation) => near_translation.mapped(),
         }
     }
 
@@ -63,6 +71,7 @@ impl Translation {
             Translation::Jcc(jcc_translation) => jcc_translation.mapped_mut(),
             Translation::Control(control_translation) => control_translation.mapped_mut(),
             Translation::Relative(relative_translation) => relative_translation.mapped_mut(),
+            Translation::Near(near_translation) => near_translation.mapped_mut(),
         }
     }
 
@@ -72,6 +81,7 @@ impl Translation {
             Translation::Jcc(jcc_translation) => jcc_translation.rel_op_rva(),
             Translation::Control(control_translation) => control_translation.rel_op_rva(),
             Translation::Relative(relative_translation) => relative_translation.rel_op_rva(),
+            Translation::Near(near_translation) => near_translation.rel_op_rva(),
         }
     }
 
@@ -95,6 +105,22 @@ impl Translation {
         }
 
         return first_occurrence;
+    }
+
+    pub fn get_rel_offset_near(target_address: u64, next_ip: u64) -> Option<i32> {
+        let rel_offset = target_address.wrapping_sub(next_ip);
+        let is_valid = (rel_offset as i64) >= (i32::MIN as i64) && (rel_offset as i64) <= (i32::MAX as i64);
+
+        is_valid.then_some(rel_offset as i32)
+    }
+
+    pub fn translate_rva_to_mapped(translations: &[Self], symbols: &[(std::ops::Range<usize>, MappedBlock)], rva_to_find: u64) -> Option<u64> {
+        Translation::find_first_translation_rva(translations, rva_to_find)
+            .and_then(|translation| Some(translation.mapped()))
+            .or(
+                Mapper::find_symbol_by_rva(symbols, rva_to_find as usize)
+                .map(|(rva_range, mapped_block)| mapped_block.address + (rva_to_find as usize - rva_range.start) as u64)
+            )
     }
 }
 

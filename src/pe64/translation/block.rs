@@ -23,15 +23,15 @@ impl TranslationBlock {
         self.translations.len() as u64
     }
 
-    pub fn address(&self, all_translations: &mut Vec<Translation>) -> Option<u64> {
+    pub fn address(&self, all_translations: &mut [Translation]) -> Option<u64> {
         self.translations.first().map(|t| all_translations[*t].mapped())
     }
 
-    pub fn buffer(&self, all_translations: &mut Vec<Translation>, assume_jumps_are_near: bool, next_block: Option<&TranslationBlock>) -> Option<Vec<u8>> {
+    pub fn buffer(&self, all_translations: &mut [Translation], assume_jumps_are_near: bool, next_block: Option<&TranslationBlock>) -> Option<Vec<u8>> {
         let mut data: Vec<u8> = Vec::new();
 
         for index in &self.translations {
-            data.extend_from_slice(&all_translations[*index].buffer().ok()?);
+            data.extend_from_slice(&all_translations[*index].buffer(assume_jumps_are_near).ok()?);
         }
 
         if let Some(next_block_address) = next_block.and_then(|block| block.address(all_translations)) {
@@ -40,13 +40,8 @@ impl TranslationBlock {
                 jmp_buffer[0] = 0xE9;
 
                 let next_rip = self.address(all_translations)? + self.byte_size(all_translations, assume_jumps_are_near)?;
-                let rel_offset = next_block_address.wrapping_sub(next_rip);
-                
-                let is_valid = (rel_offset as i64) >= (i32::MIN as i64) && (rel_offset as i64) <= (i32::MAX as i64);
 
-                if !is_valid {
-                    return None;
-                }
+                let rel_offset = Translation::get_rel_offset_near(next_block_address, next_rip)?;
                 
                 jmp_buffer[1..5].copy_from_slice(&(rel_offset as u32).to_le_bytes());
                 data.extend_from_slice(&jmp_buffer);
@@ -63,9 +58,9 @@ impl TranslationBlock {
         Some(data)
     }
 
-    pub fn byte_size(&self, all_translations: &mut Vec<Translation>, assume_jumps_are_near: bool) -> Option<u64> {
+    pub fn byte_size(&self, all_translations: &mut [Translation], assume_jumps_are_near: bool) -> Option<u64> {
         let mut total_size: u64 = self.translations.iter()
-            .map(|t| all_translations[*t].buffer()
+            .map(|t| all_translations[*t].buffer(assume_jumps_are_near)
             .and_then(|buffer| Ok(buffer.len() as u64)).ok())
             .into_iter().collect::<Option<Vec<_>>>()?
             .iter().sum();
@@ -76,7 +71,7 @@ impl TranslationBlock {
         Some(total_size)
     }
 
-    pub fn reserve(&mut self, all_translations: &mut Vec<Translation>, heap: &mut Heap, alignment: u64, assume_jumps_are_near: bool) -> Option<()> {
+    pub fn reserve(&mut self, all_translations: &mut [Translation], heap: &mut Heap, alignment: u64, assume_jumps_are_near: bool) -> Option<()> {
         let total_size = self.byte_size(all_translations, assume_jumps_are_near)?;
 
         let reserved_va = heap.reserve(total_size as u64, alignment)?;
@@ -85,22 +80,16 @@ impl TranslationBlock {
         for index in &self.translations {
             let translation = &mut all_translations[*index];
             *translation.mapped_mut() = reserved_va + offset;
-            offset += translation.buffer().ok()?.len() as u64;
+            offset += translation.buffer(assume_jumps_are_near).ok()?.len() as u64;
         }
 
         Some(())
     }
 
-    pub fn resolve(&mut self, all_translations: &mut Vec<Translation>, symbols: &Vec<(std::ops::Range<usize>, MappedBlock)>) -> Option<()> {
+    pub fn resolve(&mut self, all_translations: &mut [Translation], symbols: &[(std::ops::Range<usize>, MappedBlock)]) -> Option<()> {
         for index in &self.translations {
             if let Some(rel_op_rva) = &all_translations[*index].rel_op_rva() {
-                let rel_op_ip = Translation::find_first_translation_rva(all_translations, *rel_op_rva)
-                .and_then(|translation| Some(translation.mapped()))
-                .or(
-                    Mapper::find_symbol_by_rva(symbols, *rel_op_rva as usize)
-                    .map(|(rva_range, mapped_block)| mapped_block.address + (*rel_op_rva as usize - rva_range.start) as u64)
-                )?;
-            
+                let rel_op_ip = Translation::translate_rva_to_mapped(&all_translations, symbols, *rel_op_rva)?;
                 all_translations[*index].resolve(rel_op_ip);
             }
         }

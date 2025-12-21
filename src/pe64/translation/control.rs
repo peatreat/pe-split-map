@@ -35,7 +35,7 @@ impl ControlTranslation {
         &mut self.mapped_va
     }
     
-    pub fn buffer(&self) -> Result<Vec<u8>, iced_x86::IcedError> {
+    pub fn buffer(&self, assume_jumps_are_near: bool) -> Result<Vec<u8>, iced_x86::IcedError> {
         let mut encoder = Encoder::new(64);
 
         encoder.encode(&self.mov_instruction, self.mov_instruction.ip())?;

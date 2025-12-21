@@ -145,56 +145,58 @@ pub fn split_symbols(pe: &PE64) -> Vec<(usize, Symbol)> {
         println!("export dir rva: {:p} | size: 0x{:X} ", (export_dir.rva as *const usize), export_dir.size);
     };
 
-    if let Some(import_dir) = ImportDirectory::get_import_directory(&pe) {
+    if let Some(imports) = ImportDirectory::get_imports(&pe) {
         Symbol::update_or_insert(
             &mut symbols,
-            import_dir.dir_rva,
-            import_dir.dir_size as u32,
+            imports.dir_rva,
+            imports.dir_size as u32,
             false,
             true,
             true,
         );
 
-        println!("import dir rva: {:p} | size: 0x{:X} ", (import_dir.dir_rva as *const usize), import_dir.dir_size);
+        println!("import dir rva: {:p} | size: 0x{:X} ", (imports.dir_rva as *const usize), imports.dir_size);
 
-        if let Some((dll_name_rva, dll_name_size)) = import_dir.dll_name_rva_and_size {
-            Symbol::update_or_insert(
-                &mut symbols,
-                dll_name_rva,
-                dll_name_size as u32,
-                false,
-                true,
-                true,
-            );
-
-            println!("import dll name rva: {:p} | size: 0x{:X} ", (dll_name_rva as *const usize), dll_name_size);
-        }
-
-        import_dir.thunks.iter().for_each(|thunk| {
-            Symbol::update_or_insert(
-                &mut symbols,
-                thunk.rva,
-                thunk.size as u32,
-                false,
-                true,
-                false,
-            );
-            
-            println!("import thunk rva: {:p} | size: 0x{:X} ", (thunk.rva as *const usize), thunk.size);
-
-            if let Some((name_rva, name_size)) = thunk.name_rva_and_size {
+        for import_dir in imports.directories {
+            if let Some((dll_name_rva, dll_name_size)) = import_dir.dll_name_rva_and_size {
                 Symbol::update_or_insert(
                     &mut symbols,
-                    name_rva,
-                    name_size as u32,
+                    dll_name_rva,
+                    dll_name_size as u32,
                     false,
                     true,
                     true,
                 );
 
-                println!("import thunk name rva: {:p} | size: 0x{:X} ", (name_rva as *const usize), name_size);
+                println!("import dll name rva: {:p} | size: 0x{:X} ", (dll_name_rva as *const usize), dll_name_size);
             }
-        });
+
+            import_dir.thunks.iter().for_each(|thunk| {
+                Symbol::update_or_insert(
+                    &mut symbols,
+                    thunk.rva,
+                    thunk.size as u32,
+                    false,
+                    true,
+                    false,
+                );
+                
+                println!("import thunk rva: {:p} | size: 0x{:X} ", (thunk.rva as *const usize), thunk.size);
+
+                if let Some((name_rva, name_size)) = thunk.name_rva_and_size {
+                    Symbol::update_or_insert(
+                        &mut symbols,
+                        name_rva,
+                        name_size as u32,
+                        false,
+                        true,
+                        true,
+                    );
+
+                    println!("import thunk name rva: {:p} | size: 0x{:X} ", (name_rva as *const usize), name_size);
+                }
+            });
+        }
     }
 
     if let Some(reloc_symbols) = RelocDirectory::get_reloc_symbols(&pe) {

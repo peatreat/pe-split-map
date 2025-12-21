@@ -9,7 +9,7 @@ use pe64::PE64;
 use iced_x86::{self, Decoder, Mnemonic, OpKind};
 use rand::{seq::SliceRandom, thread_rng};
 
-use crate::{heap::HeapPage, pe64::{mapper::{Mapper, TranslationBlockSize}, symbols::{get_symbol, split_symbols}, translation::{self, Translation}}};
+use crate::{heap::HeapPage, pe64::{data_directory::{DllImport, ExportDirectory, ImportDirectory}, mapper::{Mapper, TranslationBlockSize}, symbols::{get_symbol, split_symbols}, translation::{self, Translation}}};
 
 fn main() {
     /*
@@ -45,26 +45,42 @@ fn main() {
 
     let pe = PE64::new("test.dll").unwrap();
 
+    let assume_near = true;
+
     let sym = split_symbols(&pe);
 
-    let mut translations = pe.get_translations();
+    let mut translations = pe.get_translations(assume_near);
 
     let mut code_pages = Vec::new();
     let mut symbol_pages = Vec::new();
 
-    for i in 0..10 {
-        code_pages.push(HeapPage::new(i * 0x1000, i * 0x1000 + 0x1000));
+    for i in 0..100 {
+        code_pages.push(HeapPage::new(0x300000 + i * 0x1000, 0x300000 + i * 0x1000 + 0x1000));
         symbol_pages.push(HeapPage::new(0x200000 + i * 0x1000, 0x200000 + i * 0x1000 + 0x1000));
     }
+
+    symbol_pages.push(HeapPage::new(0x500000, 0x600000));
 
     let mut code_heap = heap::Heap::new(code_pages);
     let mut symbol_heap = heap::Heap::new(symbol_pages);
 
-    let mapped_blocks = Mapper::map(&pe, &mut code_heap, &mut symbol_heap, &mut translations, &sym, TranslationBlockSize::MaxByteSize(32), true);
+    let dll_imports = [
+        DllImport::new(0x7f000000, "C:/Windows/System32/kernel32.dll").unwrap(),
+    ];
+
+    let mapped_blocks = Mapper::map(&pe, &dll_imports, &mut code_heap, &mut symbol_heap, &mut translations, &sym, TranslationBlockSize::MaxByteSize(32), true);
 
     if let Some(blocks) = mapped_blocks {
         for block in blocks {
-            println!("address: {}, data: {:02X?}", block.address, block.data);
+            println!("address: {:p}, data: {:02X?}", block.address as *const usize, block.data);
+            let mut decoder = Decoder::new(64, &block.data, 0);
+            
+            decoder.set_ip(block.address as u64);
+
+            while decoder.can_decode() {
+                let instruction = decoder.decode();
+                println!("{}", instruction);
+            }
         }
         return;
     }
@@ -109,7 +125,7 @@ fn main() {
     }
 
     // allocate memory segments, create reservation table
-    for i in 0..3 {
+    for i in 0..4 {
         let mut alloc = Vec::new();
         const ALLOC_SIZE: usize = 0x1000;
         alloc.reserve(ALLOC_SIZE);
@@ -124,7 +140,7 @@ fn main() {
     // sort by address
     raw_allocations.sort_by_key(|x| x.address);
 
-    const MAX_BLOCK_SIZE: usize = 32;
+    const MAX_BLOCK_SIZE: usize = 18;
 
     //translations.shuffle(&mut thread_rng());
 
@@ -142,17 +158,17 @@ fn main() {
         while total_size < MAX_BLOCK_SIZE && i + j < translations_len {
             let translation = &mut translations[i + j];
 
-            let mut bytes = translation.buffer().expect("Failed to get translation buffer");
-
-            if total_size + bytes.len() > MAX_BLOCK_SIZE {
-                break;
-            }
-
             if ip == 0 && j == 0 {
                 ip = translation.rva();
             }
 
             total_translations.push((translation.rva(), unsafe { (translation as *mut Translation).as_mut().unwrap() }));
+            
+            let mut bytes = translation.buffer(assume_near).expect("Failed to get translation buffer");
+
+            if total_size + bytes.len() > MAX_BLOCK_SIZE {
+                break;
+            }
 
             total_size += bytes.len();
             total_bytes.append(&mut bytes);
@@ -165,7 +181,7 @@ fn main() {
 
         let mut free_space = None;
         for alloc in &mut raw_allocations {
-            let maybe_free_space = alloc.free_space(total_size_with_jmp_rip as _);
+            let maybe_free_space = alloc.free_space((total_size  + JMP_RIP.len()) as _);
             if maybe_free_space.is_some() {
                 free_space = maybe_free_space;
                 break;
@@ -211,42 +227,40 @@ fn main() {
                 match translation {
                     Translation::Default(default_translation) => {},
                     Translation::Jcc(jcc_translation) => {
-                        ////jcc_translation.resolve(ip);
-                        //println!("{rva:X}");
-                        ////let reservation_at_address = alloc.reservations.iter().find(|r| (r.rva..(r.rva + r.buffer_size as u32)).contains(rva)).unwrap();
-                        ////let reservation_offset = rva - reservation_at_address.rva;
-                        //////let translation = pe.find_first_translation_rva(&translations, jcc_translation.branch_target as _).unwrap();
-                        //let (translation_alloc, reservation_for_translation, (res_rva, reservation_with_translation)) = raw_allocations.iter().find_map(|alloc| alloc.reservations.iter().find_map(|r| 
-                        //    if let Some(translation) = r.translation.iter().find(|x| {
-                        //        //println!("{:X}", x.0);
-                        //        x.0 == jcc_translation.branch_target as _
-                        //    }) {
-                        //        Some((alloc, r, translation))
-                        //    }
-                        //    else {
-                        //        None
-                        //    }
-                        //)).unwrap();
-                        //////let translation = translations.iter().find(|t| t as *const _ as usize == *reservation_with_translation  as *const _ as usize);
-                        ////
-//////
-                        //////if let Some((reservation_for_translation, (res_rva, reservation_with_translation))) = reservation_with_translation {
-                        ////let mut jcc_translation = jcc_translation.clone();
-                        ////let new_ip = reservation_for_translation.address + reservation_for_translation.buffer_index as u64;
-                        //let offset_from_reservation = res_rva - reservation_for_translation.rva;
-                        //let new_address = translation_alloc.address + reservation_for_translation.buffer_index as u64 + offset_from_reservation as u64;
-                        ////jcc_translation.resolve(new_address);
-                        ////let buffer = jcc_translation.buffer().unwrap();
-                        ////let alloc = unsafe { (alloc as *const Allocation as *mut Allocation).as_mut().unwrap() };
-                        ////alloc.buffer[(reservation.buffer_index)..(reservation.buffer_index +buffer.len())].copy_from_slice(&buffer);
-                        ////let x = reservation_for_translation.rva + reservation_for_translation.;
-////
-                        ////if translation_i == 0 {
-                        //    println!("{offset_from_reservation:X} {new_address:X} {:X} {:X} {:X} {:X} {:X}", res_rva, reservation_for_translation.buffer_index, reservation_for_translation.rva, jcc_translation.instruction().ip(), translation_i);
-                        ////}
+                        //jcc_translation.resolve(ip);
+                        let reservation_at_address = alloc.reservations.iter().find(|r| (r.rva..(r.rva + r.size)).contains(&rva)).unwrap();
+                        let reservation_offset = rva - reservation_at_address.rva;
+                        //let translation = pe.find_first_translation_rva(&translations, jcc_translation.branch_target as _).unwrap();
+                        let (translation_alloc, reservation_for_translation, (res_rva, reservation_with_translation)) = raw_allocations.iter().find_map(|alloc| alloc.reservations.iter().find_map(|r| 
+                            if let Some(translation) = r.translation.iter().find(|x| {
+                                //println!("{:X}", x.0);
+                                x.0 == jcc_translation.branch_target as _
+                            }) {
+                                Some((alloc, r, translation))
+                            }
+                            else {
+                                None
+                            }
+                        )).unwrap();
+                        //let translation = translations.iter().find(|t| t as *const _ as usize == *reservation_with_translation  as *const _ as usize);
+    
+                        //
+                        //if let Some((reservation_for_translation, (res_rva, reservation_with_translation))) = reservation_with_translation {
+                        let mut jcc_translation = jcc_translation.clone();
+                        let new_ip = reservation_for_translation.address + reservation_for_translation.buffer_index as u64;
+                        let offset_from_reservation = res_rva - reservation_for_translation.rva;
+                        let new_address = translation_alloc.address + reservation_for_translation.buffer_index as u64 + reservation_offset as u64;
+                        jcc_translation.resolve(new_address);
+                        let buffer = jcc_translation.buffer(assume_near).unwrap();
+                        let alloc = unsafe { (alloc as *const Allocation as *mut Allocation).as_mut().unwrap() };
+                        //alloc.buffer[(reservation.buffer_index)..(reservation.buffer_index +buffer.len())].copy_from_slice(&buffer);
+                        //let x = reservation_for_translation.rva + reservation_for_translation.;
+                    //
+                        //println!("{reservation_offset:X} {offset_from_reservation:X} {new_address:X} {:X} {:X} {:X}", res_rva, reservation_for_translation.buffer_index, reservation_for_translation.rva);
                     },
                     Translation::Control(control_translation) => {},
                     Translation::Relative(relative_translation) => {},
+                    Translation::Near(near_translation) => todo!(),
                 }
             }
         }

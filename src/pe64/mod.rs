@@ -4,7 +4,7 @@ use std::{f32::consts::E, fs, io, mem::{self, offset_of}};
 use iced_x86::{Decoder, Encoder, Instruction, code_asm::AsmRegister64};
 use winapi::um::winnt::{CONTEXT_FLOATING_POINT, IMAGE_DOS_HEADER, IMAGE_NT_HEADERS64, IMAGE_NT_OPTIONAL_HDR64_MAGIC, IMAGE_SECTION_HEADER};
 
-use crate::pe64::{section::Section, translation::{ControlTranslation, DefaultTranslation, JCCTranslation, RelativeTranslation, Translation}};
+use crate::pe64::{section::Section, translation::{ControlTranslation, DefaultTranslation, JCCTranslation, RelativeTranslation, Translation, near::NearTranslation}};
 
 pub mod symbols;
 mod section;
@@ -165,9 +165,14 @@ impl PE64 {
     block batching can either be None, NumberOfInstructions, or TotalSizeOfInstructions
     */
 
-    fn add_relative_translation(&self, mut instruction: iced_x86::Instruction, translations: &mut Vec<Translation>) -> Result<(), iced_x86::IcedError> {
+    fn add_relative_translation(&self, mut instruction: iced_x86::Instruction, translations: &mut Vec<Translation>, assume_near: bool) -> Result<(), iced_x86::IcedError> {
         match instruction.mnemonic() {
             iced_x86::Mnemonic::Lea => {
+                if assume_near {
+                    translations.push(Translation::Near(NearTranslation::new(instruction)));
+                    return Ok(());
+                }
+
                 instruction.set_code(Code::Mov_r64_imm64); // change it to: mov r64, imm64
                 instruction.set_op1_kind(OpKind::Immediate64);
                 instruction.set_immediate64(instruction.ip_rel_memory_address());
@@ -175,6 +180,11 @@ impl PE64 {
                 translations.push(Translation::Relative(RelativeTranslation::new(instruction)));
             },
             iced_x86::Mnemonic::Jmp | iced_x86::Mnemonic::Call => {
+                if assume_near {
+                    translations.push(Translation::Near(NearTranslation::new(instruction)));
+                    return Ok(());
+                }
+
                 //println!(" {:X} jmp kind: {:?}, instr: {}", instruction.ip(), instruction.op0_kind(), instruction);
                 let mut mov_instruction = Instruction::with2(Code::Mov_r64_imm64, Register::R11, instruction.ip_rel_memory_address())?;
                 mov_instruction.set_ip(instruction.ip());
@@ -221,6 +231,11 @@ impl PE64 {
                 //println!("short branch after: {}, kind: {:?}", instruction, instruction.op0_kind());
             },
             _ => {
+                if assume_near {
+                    translations.push(Translation::Near(NearTranslation::new(instruction)));
+                    return Ok(());
+                }
+
                 let unused_gpr64 = self.get_unused_gpr64(&instruction).unwrap();
 
                 let mut push_instruction = Instruction::with1(Code::Push_r64, unused_gpr64)?;
@@ -289,12 +304,13 @@ impl PE64 {
                         break;
                     }
 
-                    // from here on out we can assume we are in a jump table
-
-                    // if prev instruction is not: add cur_reg, reg then it's unexpected
+                    // if prev instruction is not: add cur_reg, reg then it's not a jump table
                     if translation.instruction().op1_kind() != OpKind::Register {
-                        panic!("unexpected instruction that uses jmp's register at {:p}", translation.instruction().ip() as *const usize);
+                        break;
+                        //panic!("unexpected instruction that uses jmp's register at {:p}", translation.instruction().ip() as *const usize);
                     }
+
+                    // from here on out we can assume we are in a jump table
 
                     let index_register = translation.instruction().op1_register();
                     let movsxd = translations[i-1].instruction();
@@ -348,7 +364,7 @@ impl PE64 {
         instruction.is_ip_rel_memory_operand() || instruction.is_jcc_short_or_near()
     }
 
-    pub fn get_translations(&self) -> Vec<Translation> {
+    pub fn get_translations(&self, assume_near: bool) -> Vec<Translation> {
         let mut translations = Vec::new();
 
         self.iter_find_section(|section| {
@@ -392,7 +408,7 @@ impl PE64 {
                 //}
 
                 if self.is_rel_instruction(&instruction) || instruction.op0_kind() == OpKind::NearBranch64 {
-                    self.add_relative_translation(instruction, &mut translations).unwrap();
+                    self.add_relative_translation(instruction, &mut translations, assume_near).unwrap();
                 } 
                 else if instruction.mnemonic() == iced_x86::Mnemonic::Jmp {
                     self.add_switch_translation(instruction, &mut translations).unwrap();

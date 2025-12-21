@@ -1,7 +1,7 @@
-use iced_x86::code_asm::bl;
+use iced_x86::{Decoder, code_asm::bl};
 use rand::seq::SliceRandom;
 
-use crate::{heap::{self, Heap}, pe64::{PE64, symbols::Symbol, translation::{Translation, block::TranslationBlock}}};
+use crate::{heap::{self, Heap}, pe64::{PE64, data_directory::{DllImport, ExportDirectory, ImportDirectory, RelocDirectory}, symbols::Symbol, translation::{Translation, block::TranslationBlock}}};
 
 pub struct Mapper;
 
@@ -17,7 +17,7 @@ pub enum TranslationBlockSize {
 }
 
 impl Mapper {
-    pub fn find_symbol_by_rva(symbols: &Vec<(std::ops::Range<usize>, MappedBlock)>, rva: usize) -> Option<&(std::ops::Range<usize>, MappedBlock)> {
+    pub fn find_symbol_by_rva(symbols: &[(std::ops::Range<usize>, MappedBlock)], rva: usize) -> Option<&(std::ops::Range<usize>, MappedBlock)> {
         let mut first = 0isize;
         let mut last = symbols.len() as isize - 1;
 
@@ -36,8 +36,26 @@ impl Mapper {
 
         None
     }
+    pub fn find_symbol_by_rva_mut(symbols: &mut [(std::ops::Range<usize>, MappedBlock)], rva: usize) -> Option<&mut (std::ops::Range<usize>, MappedBlock)> {
+        let mut first = 0isize;
+        let mut last = symbols.len() as isize - 1;
 
-    fn map_symbols(pe: &PE64, heap: &mut Heap, symbols: &Vec<(usize, Symbol)>) -> Option<Vec<(std::ops::Range<usize>, MappedBlock)>> {
+        while (first <= last) {
+            let mid_index = (first + last) / 2;
+
+            if (symbols[mid_index as usize].0.contains(&rva)) {
+                return Some(&mut symbols[mid_index as usize]);
+            } else if (rva < symbols[mid_index as usize].0.start) {
+                last = mid_index - 1;
+            } else {
+                first = mid_index + 1;
+            }
+        }
+
+        None
+    }
+
+    fn map_symbols(pe: &PE64, heap: &mut Heap, symbols: &[(usize, Symbol)]) -> Option<Vec<(std::ops::Range<usize>, MappedBlock)>> {
         // filter out ignored symbols
         let mut symbols = symbols.iter()
         .filter(|(rva, symbol)| !symbol.should_ignore && symbol.max_operation_size > 0)
@@ -62,9 +80,9 @@ impl Mapper {
         Some(symbols)
     }
 
-    pub fn map(pe: &PE64, code_heap: &mut Heap, symbol_heap: &mut Heap, translations: &mut Vec<Translation>, symbols: &Vec<(usize, Symbol)>, block_size: TranslationBlockSize, assume_jumps_are_near: bool) -> Option<Vec<MappedBlock>> {
+    pub fn map(pe: &PE64, dll_imports: &[DllImport], code_heap: &mut Heap, symbol_heap: &mut Heap, translations: &mut [Translation], symbols: &[(usize, Symbol)], block_size: TranslationBlockSize, assume_jumps_are_near: bool) -> Option<Vec<MappedBlock>> {
         // map symbols
-        let symbols = Mapper::map_symbols(pe, symbol_heap, symbols)?;
+        let mut symbols = Mapper::map_symbols(pe, symbol_heap, symbols)?;
 
         // create our blocks
         let mut blocks: Vec<TranslationBlock> = Vec::new();
@@ -106,6 +124,60 @@ impl Mapper {
         // resolve blocks
         for block in blocks.iter_mut() {
             block.resolve(translations, &symbols)?;
+        }
+
+        // resolve base relocations
+        if let Some(reloc_symbols) = RelocDirectory::get_reloc_symbols(pe) {
+            for reloc_symbol in reloc_symbols {
+                if let Some(8) = reloc_symbol.size {
+                    let mut relocated_rva: u64 = *pe.get_ref_from_rva::<u64>(reloc_symbol.rva)?;
+
+                    relocated_rva = relocated_rva.wrapping_sub(pe.nt64().OptionalHeader.ImageBase);
+
+                    let relocated_symbol_address = Translation::translate_rva_to_mapped(&translations, &symbols, relocated_rva)?;
+
+                    if let Some((rva_range, symbol)) = Mapper::find_symbol_by_rva_mut(&mut symbols, reloc_symbol.rva) {
+                        let symbol_offset = reloc_symbol.rva - rva_range.start;
+                        symbol.data[symbol_offset..(symbol_offset + 8)].copy_from_slice(&relocated_symbol_address.to_le_bytes());
+                    }
+                }
+            }
+        }
+
+        // resolve imports
+        if let Some(imports) = ImportDirectory::get_imports(pe) {
+            for import_dir in imports.directories {
+                if let Some(dll_name) = import_dir.dll_name_rva_and_size
+                    .and_then(|(name_rva, size)| pe.get_data_from_rva(name_rva, size))
+                    .and_then(|dll_name_slice| String::from_utf8(dll_name_slice[..dll_name_slice.len() - 1].to_vec()).ok())
+                { 
+                    println!("dll: {}", dll_name);
+
+                    let dll_import = dll_imports.iter().find(|dll_import| dll_import.name.eq_ignore_ascii_case(&dll_name))?;
+
+                    let exports = ExportDirectory::get_export_directory(&dll_import.pe)?;
+
+                    for thunk in import_dir.thunks {
+                        let export_offset = if let Some(import_name) = thunk.name_rva_and_size
+                                .and_then(|(name_rva, size)| pe.get_data_from_rva(name_rva + std::mem::size_of::<u16>(), size - std::mem::size_of::<u16>()))
+                                .and_then(|import_name_slice| String::from_utf8(import_name_slice[..import_name_slice.len() - 1].to_vec()).ok())
+                            {
+                                exports.get_export_offset_from_name(&import_name)
+                            } else if let Some(ordinal) = thunk.ordinal {
+                                exports.get_export_offset_from_ordinal(ordinal)
+                            } else {
+                                None
+                            }?;
+
+                        let import_address = dll_import.base + export_offset as usize;
+
+                        if let Some((rva_range, symbol)) = Mapper::find_symbol_by_rva_mut(&mut symbols, thunk.rva_of_data) {
+                            let symbol_offset = thunk.rva_of_data - rva_range.start;
+                            symbol.data[symbol_offset..(symbol_offset + 8)].copy_from_slice(&import_address.to_le_bytes());
+                        }
+                    }
+                }
+            }
         }
 
         // create mapped blocks
