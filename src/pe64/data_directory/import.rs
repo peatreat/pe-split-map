@@ -12,6 +12,7 @@ pub struct Imports {
 pub struct DllImport {
     pub base: usize,
     pub name: String,
+    pub path: String,
 }
 
 pub struct ImportDirectory {
@@ -112,6 +113,7 @@ impl DllImport {
             Self {
                 base,
                 name: std::path::Path::new(path).file_name()?.to_str()?.to_string(),
+                path: path.to_owned(),
             }
         )
     }

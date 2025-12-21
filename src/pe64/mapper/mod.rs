@@ -160,7 +160,7 @@ impl Mapper {
 
                     let dll_import = dll_imports.iter().find(|dll_import| dll_import.name.eq_ignore_ascii_case(&dll_name)).ok_or(PSMError::ImportDLLNotFound(dll_name.to_owned()))?;
 
-                    let exports = ExportDirectory::get_export_directory(&PE64::new(&dll_import.name)?)?.ok_or(PSMError::ImportHasNoExports(dll_name.to_owned()))?;
+                    let exports = ExportDirectory::get_export_directory(&PE64::new(&dll_import.path)?)?.ok_or(PSMError::ImportHasNoExports(dll_name.to_owned()))?;
 
                     for thunk in import_dir.thunks {
                         let export_offset = if let Some(import_name) = thunk.name_rva_and_size
