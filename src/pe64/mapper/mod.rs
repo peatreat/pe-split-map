@@ -5,6 +5,11 @@ use crate::{heap::{self, Heap}, pe64::{PE64, data_directory::{DllImport, ExportD
 
 pub struct Mapper;
 
+pub struct Mapped {
+    pub entrypoint: u64,
+    pub blocks: Vec<MappedBlock>,
+}
+
 #[derive(Default)]
 pub struct MappedBlock {
     pub address: u64,
@@ -80,7 +85,7 @@ impl Mapper {
         Some(symbols)
     }
 
-    pub fn map(pe: &PE64, dll_imports: &[DllImport], code_heap: &mut Heap, symbol_heap: &mut Heap, translations: &mut [Translation], symbols: &[(usize, Symbol)], block_size: TranslationBlockSize, assume_jumps_are_near: bool) -> Option<Vec<MappedBlock>> {
+    pub fn map(pe: &PE64, dll_imports: &[DllImport], code_heap: &mut Heap, symbol_heap: &mut Heap, translations: &mut [Translation], symbols: &[(usize, Symbol)], block_size: TranslationBlockSize, assume_jumps_are_near: bool) -> Option<Mapped> {
         // map symbols
         let mut symbols = Mapper::map_symbols(pe, symbol_heap, symbols)?;
 
@@ -180,6 +185,10 @@ impl Mapper {
             }
         }
 
+        // get entrypoint address
+        let entrypoint = Translation::find_first_translation_rva(translations, pe.nt64().OptionalHeader.AddressOfEntryPoint as u64)
+            .and_then(|translation| Some(translation.mapped()))?;
+
         // create mapped blocks
         let mut mapped_blocks: Vec<MappedBlock> = Vec::new();
 
@@ -197,6 +206,11 @@ impl Mapper {
         // shuffle to mix up the order of writes being transmitted
         mapped_blocks.shuffle(&mut rng);
 
-        Some(mapped_blocks)
+        Some(
+            Mapped {
+                entrypoint,
+                blocks: mapped_blocks,
+            }
+        )
     }
 }

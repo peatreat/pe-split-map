@@ -1,7 +1,7 @@
 use core::panic;
 use std::{f32::consts::E, fs, io, mem::{self, offset_of}};
 
-use iced_x86::{Decoder, Encoder, Instruction, code_asm::AsmRegister64};
+use iced_x86::{Code, Decoder, Encoder, Instruction, code_asm::AsmRegister64};
 use winapi::um::winnt::{CONTEXT_FLOATING_POINT, IMAGE_DOS_HEADER, IMAGE_NT_HEADERS64, IMAGE_NT_OPTIONAL_HDR64_MAGIC, IMAGE_SECTION_HEADER};
 
 use crate::pe64::{section::Section, translation::{ControlTranslation, DefaultTranslation, JCCTranslation, RelativeTranslation, Translation, near::NearTranslation}};
@@ -12,7 +12,7 @@ pub mod data_directory;
 pub mod translation;
 pub mod mapper;
 
-pub use crate::iced_x86::*;
+use iced_x86::*;
 
 pub struct PE64 {
     _raw: Vec<u8>,
@@ -21,7 +21,11 @@ pub struct PE64 {
 impl PE64 {
     pub fn new(path: &str) -> Result<Self, std::io::Error> {
         let bytes = fs::read(path)?;
+        
+        PE64::new_from_bytes(bytes)
+    }
 
+    pub fn new_from_bytes(bytes: Vec<u8>) -> Result<Self, std::io::Error> {
         // check if valid pe by checking e_magic in DOS header
         if bytes.len() < mem::size_of::<IMAGE_DOS_HEADER>() || bytes[0] != 0x4D || bytes[1] != 0x5A {
             return Err(io::Error::new(
@@ -40,7 +44,7 @@ impl PE64 {
             ));
         }
 
-        Ok (pe)
+        Ok(pe)
     }
 
     pub fn dos<'a>(&self) -> &'a IMAGE_DOS_HEADER {

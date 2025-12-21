@@ -68,9 +68,9 @@ fn main() {
         DllImport::new(0x7f000000, "C:/Windows/System32/kernel32.dll").unwrap(),
     ];
 
-    let mapped_blocks = Mapper::map(&pe, &dll_imports, &mut code_heap, &mut symbol_heap, &mut translations, &sym, TranslationBlockSize::MaxByteSize(32), true);
+    let mapped = Mapper::map(&pe, &dll_imports, &mut code_heap, &mut symbol_heap, &mut translations, &sym, TranslationBlockSize::MaxByteSize(32), true);
 
-    if let Some(blocks) = mapped_blocks {
+    if let Some(blocks) = mapped.and_then(|mapped| Some(mapped.blocks)) {
         for block in blocks {
             println!("address: {:p}, data: {:02X?}", block.address as *const usize, block.data);
             let mut decoder = Decoder::new(64, &block.data, 0);
