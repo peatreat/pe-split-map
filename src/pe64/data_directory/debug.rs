@@ -1,6 +1,6 @@
 use std::mem;
 
-use winapi::um::winnt::{IMAGE_DEBUG_DIRECTORY, IMAGE_DIRECTORY_ENTRY_DEBUG};
+use pelite::image::{IMAGE_DEBUG_DIRECTORY, IMAGE_DIRECTORY_ENTRY_DEBUG};
 
 use crate::pe64::PE64;
 

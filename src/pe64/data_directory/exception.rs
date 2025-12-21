@@ -1,5 +1,6 @@
 use std::mem;
-use winapi::um::winnt::{IMAGE_DIRECTORY_ENTRY_EXCEPTION, IMAGE_RUNTIME_FUNCTION_ENTRY};
+
+use pelite::image::{IMAGE_DIRECTORY_ENTRY_EXCEPTION, RUNTIME_FUNCTION};
 
 use crate::pe64::PE64;
 
@@ -37,18 +38,18 @@ impl ExceptionDirectory {
         let exception_dir_rva = exception_data_directory.VirtualAddress as usize;
         let exception_dir_size = exception_data_directory.Size as usize;
 
-        let number_of_entries = exception_dir_size / mem::size_of::<IMAGE_RUNTIME_FUNCTION_ENTRY>();
+        let number_of_entries = exception_dir_size / mem::size_of::<RUNTIME_FUNCTION>();
 
         let mut unwind_blocks = Vec::new();
 
         for i in 0..number_of_entries {
-            let entry: Option<&IMAGE_RUNTIME_FUNCTION_ENTRY> = pe64.get_ref_from_rva(exception_dir_rva + i * mem::size_of::<IMAGE_RUNTIME_FUNCTION_ENTRY>());
+            let entry: Option<&RUNTIME_FUNCTION> = pe64.get_ref_from_rva(exception_dir_rva + i * mem::size_of::<RUNTIME_FUNCTION>());
 
             if let Some(entry) = entry {
-                let unwind_info: Option<&UnwindInfo> = pe64.get_ref_from_rva(*unsafe { entry.u.UnwindData() } as usize);
+                let unwind_info: Option<&UnwindInfo> = pe64.get_ref_from_rva(entry.UnwindData as usize);
 
                 if let Some(unwind_info) = unwind_info {
-                    let block_rva = *unsafe { entry.u.UnwindInfoAddress() } as usize;
+                    let block_rva = entry.UnwindData as usize;
                     let block_size = mem::size_of::<UnwindInfo>() - mem::size_of::<UnwindCode>() + (unwind_info.count_of_codes as usize * mem::size_of::<UnwindCode>());
 
                     unwind_blocks.push(UnwindBlock {

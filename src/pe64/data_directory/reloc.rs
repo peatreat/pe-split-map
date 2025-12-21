@@ -1,7 +1,7 @@
 use core::num;
 use std::mem;
 
-use winapi::um::winnt::{IMAGE_BASE_RELOCATION, IMAGE_DIRECTORY_ENTRY_BASERELOC, IMAGE_REL_BASED_DIR64};
+use pelite::image::{IMAGE_BASE_RELOCATION, IMAGE_DIRECTORY_ENTRY_BASERELOC, IMAGE_REL_BASED_DIR64};
 
 use crate::pe64::PE64;
 

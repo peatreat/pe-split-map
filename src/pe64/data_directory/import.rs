@@ -1,8 +1,16 @@
 use std::mem::{self, offset_of};
 
-use winapi::um::winnt::{IMAGE_DIRECTORY_ENTRY_IMPORT, IMAGE_IMPORT_BY_NAME, IMAGE_IMPORT_DESCRIPTOR, IMAGE_ORDINAL_FLAG, IMAGE_THUNK_DATA};
+use pelite::{image::{IMAGE_DIRECTORY_ENTRY_IMPORT, IMAGE_IMPORT_DESCRIPTOR}, pe::image::IMAGE_ORDINAL_FLAG};
 
 use crate::pe64::{PE64, data_directory::import};
+
+type IMAGE_THUNK_DATA64 = u64;
+
+#[repr(C)]
+struct IMAGE_IMPORT_BY_NAME {
+    pub Hint: u16,
+    pub Name: [u8; 1],
+}
 
 pub struct Imports {
     pub dir_rva: usize,
@@ -82,23 +90,23 @@ impl ImportDirectory {
                     }
                 }
 
-                let mut original_thunk_rva = *unsafe { entry.u.OriginalFirstThunk() } as usize;
-                let original_thunk: Option<&IMAGE_THUNK_DATA> = pe64.get_ref_from_rva(original_thunk_rva);
+                let mut original_thunk_rva = entry.OriginalFirstThunk as usize;
+                let original_thunk: Option<&IMAGE_THUNK_DATA64> = pe64.get_ref_from_rva(original_thunk_rva);
                 let mut count = 0;
 
                 if let Some(mut original_thunk) = original_thunk {
                     unsafe {
-                        while *original_thunk.u1.AddressOfData() != 0 {
+                        while *original_thunk != 0 {
                             let mut thunk_data = ThunkData {
                                 rva: original_thunk_rva,
-                                size: mem::size_of::<IMAGE_THUNK_DATA>(),
-                                rva_of_data: entry.FirstThunk as usize + count * mem::size_of::<IMAGE_THUNK_DATA>(),
+                                size: mem::size_of::<IMAGE_THUNK_DATA64>(),
+                                rva_of_data: entry.FirstThunk as usize + count * mem::size_of::<IMAGE_THUNK_DATA64>(),
                                 ordinal: None,
                                 name_rva_and_size: None,
                             };
 
-                            if *original_thunk.u1.Ordinal() & IMAGE_ORDINAL_FLAG == 0 { // import by name
-                                let import_by_name_rva = *original_thunk.u1.AddressOfData() as usize;
+                            if *original_thunk & IMAGE_ORDINAL_FLAG == 0 { // import by name
+                                let import_by_name_rva = *original_thunk as usize;
                                 let mut import_size = mem::size_of::<u16>(); // Hint is u16
 
                                 if let Some(mut size) = Self::get_string_size(pe64, import_by_name_rva + offset_of!(IMAGE_IMPORT_BY_NAME, Name)) {
@@ -108,13 +116,13 @@ impl ImportDirectory {
 
                                 thunk_data.name_rva_and_size = Some((import_by_name_rva, import_size));
                             } else {
-                                thunk_data.ordinal = Some(*(original_thunk.u1.Ordinal() as *const u64 as *const u16));
+                                thunk_data.ordinal = Some(*(original_thunk as *const u64 as *const u16));
                             }
 
                             import_directory.thunks.push(thunk_data);
 
-                            original_thunk = &*(original_thunk as *const IMAGE_THUNK_DATA).add(1);
-                            original_thunk_rva += mem::size_of::<IMAGE_THUNK_DATA>();
+                            original_thunk = &*(original_thunk as *const IMAGE_THUNK_DATA64).add(1);
+                            original_thunk_rva += mem::size_of::<IMAGE_THUNK_DATA64>();
                             count += 1;
                         }
                     }

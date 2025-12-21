@@ -2,7 +2,7 @@ use core::panic;
 use std::{f32::consts::E, fs, io, mem::{self, offset_of}};
 
 use iced_x86::{Code, Decoder, Encoder, Instruction, code_asm::AsmRegister64};
-use winapi::um::winnt::{CONTEXT_FLOATING_POINT, IMAGE_DOS_HEADER, IMAGE_NT_HEADERS64, IMAGE_NT_OPTIONAL_HDR64_MAGIC, IMAGE_SECTION_HEADER};
+use pelite::image::{IMAGE_DOS_HEADER, IMAGE_NT_HEADERS64, IMAGE_NT_OPTIONAL_HDR64_MAGIC, IMAGE_SECTION_HEADER};
 
 use crate::pe64::{section::Section, translation::{ControlTranslation, DefaultTranslation, JCCTranslation, RelativeTranslation, Translation, near::NearTranslation}};
 

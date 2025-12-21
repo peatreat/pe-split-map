@@ -1,6 +1,6 @@
 use std::slice;
 
-use winapi::um::winnt::{IMAGE_SCN_MEM_EXECUTE, IMAGE_SECTION_HEADER};
+use pelite::image::{IMAGE_SCN_MEM_EXECUTE, IMAGE_SECTION_HEADER};
 
 pub struct Section<'a> {
     pub _raw: &'a [u8],
@@ -34,7 +34,7 @@ impl<'a> From<(&'a [u8], &'a IMAGE_SECTION_HEADER)> for Section<'a> {
             _raw: section_raw,
             name,
             virtual_address: header.VirtualAddress as usize,
-            virtual_size: *unsafe { header.Misc.VirtualSize() } as usize,
+            virtual_size: header.VirtualSize as usize,
             characteristics: header.Characteristics
         }
     }

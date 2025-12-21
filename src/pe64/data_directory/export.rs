@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use winapi::um::winnt::{IMAGE_DIRECTORY_ENTRY_EXPORT, IMAGE_EXPORT_DIRECTORY};
+use pelite::image::{IMAGE_DIRECTORY_ENTRY_EXPORT, IMAGE_EXPORT_DIRECTORY};
 
 use crate::pe64::PE64;
 
