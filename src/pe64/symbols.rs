@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use iced_x86::Decoder;
 
+use crate::psm_error::PSMError;
+
 use super::PE64;
 use super::data_directory::{DebugDirectory, ExceptionDirectory, ExportDirectory, ImportDirectory, RelocDirectory, reloc};
 
@@ -49,7 +51,7 @@ impl Symbol {
     }
 }
 
-pub fn split_symbols(pe: &PE64) -> Vec<(usize, Symbol)> {
+pub fn split_symbols(pe: &PE64) -> Result<Vec<(usize, Symbol)>, PSMError> {
     let mut symbols: HashMap<usize, Symbol> = HashMap::new();
 
     pe.iter_find_section(|section| {
@@ -132,7 +134,7 @@ pub fn split_symbols(pe: &PE64) -> Vec<(usize, Symbol)> {
         //println!("unwind block rva: {:p} | size: 0x{:X} ", (unwind_block.rva as *const usize), unwind_block.size);
     });
 
-    if let Some(export_dir) = ExportDirectory::get_export_directory(&pe) {
+    if let Some(export_dir) = ExportDirectory::get_export_directory(&pe)? {
         Symbol::update_or_insert(
             &mut symbols,
             export_dir.rva,
@@ -145,7 +147,7 @@ pub fn split_symbols(pe: &PE64) -> Vec<(usize, Symbol)> {
         println!("export dir rva: {:p} | size: 0x{:X} ", (export_dir.rva as *const usize), export_dir.size);
     };
 
-    if let Some(imports) = ImportDirectory::get_imports(&pe) {
+    if let Some(imports) = ImportDirectory::get_imports(&pe)? {
         Symbol::update_or_insert(
             &mut symbols,
             imports.dir_rva,
@@ -199,7 +201,7 @@ pub fn split_symbols(pe: &PE64) -> Vec<(usize, Symbol)> {
         }
     }
 
-    if let Some(reloc_symbols) = RelocDirectory::get_reloc_symbols(&pe) {
+    if let Some(reloc_symbols) = RelocDirectory::get_reloc_symbols(&pe)? {
         // for relocation symbols, merge symbols that are <= 0x10 bytes apart into one symbol so vtables don't get split up
 
         if !reloc_symbols.is_empty() {
@@ -365,5 +367,5 @@ pub fn split_symbols(pe: &PE64) -> Vec<(usize, Symbol)> {
     //    //println!("symbol rva: {:p} | end rva: {:p}", (rva as *const usize), (rva + symbol.max_operation_size as usize) as *const usize);
     //}
 
-    final_symbols
+    Ok(final_symbols)
 }

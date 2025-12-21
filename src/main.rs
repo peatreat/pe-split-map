@@ -2,6 +2,7 @@
 
 mod pe64;
 mod heap;
+mod psm_error;
 
 use std::{cell::RefCell, collections::HashMap};
 
@@ -47,7 +48,7 @@ fn main() {
 
     let assume_near = true;
 
-    let sym = split_symbols(&pe);
+    let sym = split_symbols(&pe).unwrap();
 
     let mut translations = pe.get_translations(assume_near);
 
@@ -70,7 +71,7 @@ fn main() {
 
     let mapped = Mapper::map(&pe, &dll_imports, &mut code_heap, &mut symbol_heap, &mut translations, &sym, TranslationBlockSize::MaxByteSize(32), true);
 
-    if let Some(blocks) = mapped.and_then(|mapped| Some(mapped.blocks)) {
+    if let Ok(blocks) = mapped.and_then(|mapped| Ok(mapped.blocks)) {
         for block in blocks {
             println!("address: {:p}, data: {:02X?}", block.address as *const usize, block.data);
             let mut decoder = Decoder::new(64, &block.data, 0);

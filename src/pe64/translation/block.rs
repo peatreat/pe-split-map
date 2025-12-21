@@ -1,6 +1,6 @@
 use iced_x86::{Encoder, IcedError, MemoryOperand, code_asm::tr};
 
-use crate::{heap::Heap, pe64::{mapper::{MappedBlock, Mapper}, translation::{self, Translation}}};
+use crate::{psm_error::{PSMError, Result}, heap::Heap, pe64::{mapper::{MappedBlock, Mapper}, translation::{self, Translation}}};
 
 pub struct TranslationBlock {
     translations: Vec<usize>
@@ -23,18 +23,20 @@ impl TranslationBlock {
         self.translations.len() as u64
     }
 
-    pub fn address(&self, all_translations: &mut [Translation]) -> Option<u64> {
-        self.translations.first().map(|t| all_translations[*t].mapped())
+    pub fn address(&self, all_translations: &mut [Translation]) -> Result<u64> {
+        self.translations.first()
+            .map(|t| all_translations[*t].mapped())
+            .ok_or(PSMError::EmptyTranslationBlock)
     }
 
-    pub fn buffer(&self, all_translations: &mut [Translation], assume_jumps_are_near: bool, next_block: Option<&TranslationBlock>) -> Option<Vec<u8>> {
+    pub fn buffer(&self, all_translations: &mut [Translation], assume_jumps_are_near: bool, next_block: Option<&TranslationBlock>) -> Result<Vec<u8>> {
         let mut data: Vec<u8> = Vec::new();
 
         for index in &self.translations {
-            data.extend_from_slice(&all_translations[*index].buffer(assume_jumps_are_near).ok()?);
+            data.extend_from_slice(&all_translations[*index].buffer(assume_jumps_are_near)?);
         }
 
-        if let Some(next_block_address) = next_block.and_then(|block| block.address(all_translations)) {
+        if let Some(next_block_address) = next_block.and_then(|block| block.address(all_translations).ok()) {
             if assume_jumps_are_near {
                 let mut jmp_buffer = [0u8; 5];
                 jmp_buffer[0] = 0xE9;
@@ -55,23 +57,26 @@ impl TranslationBlock {
             }
         }
 
-        Some(data)
+        Ok(data)
     }
 
-    pub fn byte_size(&self, all_translations: &mut [Translation], assume_jumps_are_near: bool) -> Option<u64> {
+    pub fn byte_size(&self, all_translations: &mut [Translation], assume_jumps_are_near: bool) -> Result<u64> {
         let mut total_size: u64 = self.translations.iter()
-            .map(|t| all_translations[*t].buffer(assume_jumps_are_near)
-            .and_then(|buffer| Ok(buffer.len() as u64)).ok())
-            .into_iter().collect::<Option<Vec<_>>>()?
+            .map(|t| 
+                all_translations[*t].buffer(assume_jumps_are_near)
+                .and_then(|buffer| Ok(buffer.len() as u64))
+                .map_err(PSMError::from)
+            )
+            .into_iter().collect::<Result<Vec<_>>>()?
             .iter().sum();
         
         // add extra space for abs jump to next block
         total_size += if assume_jumps_are_near { 5 } else { 14 };
 
-        Some(total_size)
+        Ok(total_size)
     }
 
-    pub fn reserve(&mut self, all_translations: &mut [Translation], heap: &mut Heap, alignment: u64, assume_jumps_are_near: bool) -> Option<()> {
+    pub fn reserve(&mut self, all_translations: &mut [Translation], heap: &mut Heap, alignment: u64, assume_jumps_are_near: bool) -> Result<()> {
         let total_size = self.byte_size(all_translations, assume_jumps_are_near)?;
 
         let reserved_va = heap.reserve(total_size as u64, alignment)?;
@@ -80,13 +85,13 @@ impl TranslationBlock {
         for index in &self.translations {
             let translation = &mut all_translations[*index];
             *translation.mapped_mut() = reserved_va + offset;
-            offset += translation.buffer(assume_jumps_are_near).ok()?.len() as u64;
+            offset += translation.buffer(assume_jumps_are_near)?.len() as u64;
         }
 
-        Some(())
+        Ok(())
     }
 
-    pub fn resolve(&mut self, all_translations: &mut [Translation], symbols: &[(std::ops::Range<usize>, MappedBlock)]) -> Option<()> {
+    pub fn resolve(&mut self, all_translations: &mut [Translation], symbols: &[(std::ops::Range<usize>, MappedBlock)]) -> Result<()> {
         for index in &self.translations {
             if let Some(rel_op_rva) = &all_translations[*index].rel_op_rva() {
                 let rel_op_ip = Translation::translate_rva_to_mapped(&all_translations, symbols, *rel_op_rva)?;
@@ -94,6 +99,6 @@ impl TranslationBlock {
             }
         }
 
-        Some(())
+        Ok(())
     }
 }

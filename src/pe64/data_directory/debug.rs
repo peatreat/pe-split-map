@@ -26,7 +26,7 @@ impl DebugDirectory {
         let number_of_entries = debug_size / mem::size_of::<IMAGE_DEBUG_DIRECTORY>();
 
         for i in 0..number_of_entries {
-            let entry: Option<&IMAGE_DEBUG_DIRECTORY> = pe64.get_ref_from_rva(debug_rva + i * mem::size_of::<IMAGE_DEBUG_DIRECTORY>());
+            let entry: Option<&IMAGE_DEBUG_DIRECTORY> = pe64.get_ref_from_rva(debug_rva + i * mem::size_of::<IMAGE_DEBUG_DIRECTORY>()).ok();
 
             if let Some(entry) = entry {
                 debug_directories.push(Self {

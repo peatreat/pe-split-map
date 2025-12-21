@@ -41,10 +41,10 @@ impl ExceptionDirectory {
         let mut unwind_blocks = Vec::new();
 
         for i in 0..number_of_entries {
-            let entry: Option<&RUNTIME_FUNCTION> = pe64.get_ref_from_rva(exception_dir_rva + i * mem::size_of::<RUNTIME_FUNCTION>());
+            let entry: Option<&RUNTIME_FUNCTION> = pe64.get_ref_from_rva(exception_dir_rva + i * mem::size_of::<RUNTIME_FUNCTION>()).ok();
 
             if let Some(entry) = entry {
-                let unwind_info: Option<&UnwindInfo> = pe64.get_ref_from_rva(entry.UnwindData as usize);
+                let unwind_info: Option<&UnwindInfo> = pe64.get_ref_from_rva(entry.UnwindData as usize).ok();
 
                 if let Some(unwind_info) = unwind_info {
                     let block_rva = entry.UnwindData as usize;

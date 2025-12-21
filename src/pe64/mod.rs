@@ -3,7 +3,7 @@ use std::{f32::consts::E, fs, io, mem::{self, offset_of}};
 
 use iced_x86::{Code, Decoder, Encoder, Instruction, code_asm::AsmRegister64};
 
-use crate::pe64::{headers::{IMAGE_DOS_HEADER, IMAGE_NT_HEADERS64, IMAGE_NT_OPTIONAL_HDR64_MAGIC, IMAGE_SECTION_HEADER}, section::Section, translation::{ControlTranslation, DefaultTranslation, JCCTranslation, RelativeTranslation, Translation, near::NearTranslation}};
+use crate::{psm_error::PSMError, pe64::{headers::{IMAGE_DOS_HEADER, IMAGE_NT_HEADERS64, IMAGE_NT_OPTIONAL_HDR64_MAGIC, IMAGE_SECTION_HEADER}, section::Section, translation::{ControlTranslation, DefaultTranslation, JCCTranslation, RelativeTranslation, Translation, near::NearTranslation}}};
 
 mod headers;
 pub mod symbols;
@@ -19,29 +19,29 @@ pub struct PE64 {
 }
 
 impl PE64 {
-    pub fn new(path: &str) -> Result<Self, std::io::Error> {
+    pub fn new(path: &str) -> Result<Self, PSMError> {
         let bytes = fs::read(path)?;
         
         PE64::new_from_bytes(bytes)
     }
 
-    pub fn new_from_bytes(bytes: Vec<u8>) -> Result<Self, std::io::Error> {
+    pub fn new_from_bytes(bytes: Vec<u8>) -> Result<Self, PSMError> {
         // check if valid pe by checking e_magic in DOS header
         if bytes.len() < mem::size_of::<IMAGE_DOS_HEADER>() || bytes[0] != 0x4D || bytes[1] != 0x5A {
-            return Err(io::Error::new(
+            return Err(PSMError::IOError(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "File is not a valid PE",
-            ));
+            )));
         }
 
         let pe = PE64 { _raw: bytes };
 
         // check if 64-bit
         if !pe.is_64() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
+            return Err(PSMError::IOError(io::Error::new(
+                io::ErrorKind::InvalidData,
                 "File is not a valid PE64",
-            ));
+            )));
         }
 
         Ok(pe)
@@ -65,34 +65,57 @@ impl PE64 {
         self.nt64().OptionalHeader.ImageBase
     }
 
-    pub fn rva_to_offset(&self, rva: usize) -> Option<usize> {
+    pub fn rva_to_offset(&self, rva: usize) -> Result<usize, PSMError> {
         self.iter_find_section(|section| section.contains_rva(rva))
             .map(|section| {
                 let offset_within_section = rva - section.virtual_address;
                 let section_raw_offset = section._raw.as_ptr() as usize - self._raw.as_ptr() as usize;
                 section_raw_offset + offset_within_section
             })
+            .ok_or(PSMError::RVANotFound(rva as u64))
     }
 
-    pub fn get_ref_from_rva<'a, T>(&'a self, rva: usize) -> Option<&'a T> {
+    pub fn get_ref_from_rva<'a, T>(&'a self, rva: usize) -> Result<&'a T, PSMError> {
         let offset = self.rva_to_offset(rva)?;
 
         if offset + mem::size_of::<T>() > self._raw.len() {
-            return None;
+            return Err(PSMError::InvalidRVA(rva as u64));
         }
 
-        Some(unsafe { &*(self._raw.as_ptr().add(offset) as *const T) })
+        Ok(unsafe { &*(self._raw.as_ptr().add(offset) as *const T) })
     }
 
-    pub fn get_data_from_rva(&self, rva: usize, size: usize) -> Option<&[u8]> {
+    pub fn get_data_from_rva(&self, rva: usize, size: usize) -> Result<&[u8], PSMError> {
         let offset = self.iter_find_section(|section| section.contains_rva(rva) && rva + size <= section.virtual_address + section._raw.len())
             .map(|section| {
                 let offset_within_section = rva - section.virtual_address;
                 let section_raw_offset = section._raw.as_ptr() as usize - self._raw.as_ptr() as usize;
                 section_raw_offset + offset_within_section
-            })?;
+            })
+            .ok_or(PSMError::RVANotFound(rva as u64))?;
 
-        Some(&self._raw[offset..offset+size])
+        Ok(&self._raw[offset..offset+size])
+    }
+
+    
+    pub fn get_string_size(&self, rva: usize) -> Result<usize, PSMError> {
+        let mut offset = self.rva_to_offset(rva)?;
+
+        let mut size = 1; // start with 1 to account for null terminator
+        
+        while offset < self._raw.len() {
+            let byte = self._raw.get(offset)
+                .ok_or(PSMError::InvalidRVA(rva as u64 + offset as u64))?;
+
+            if *byte == 0 {
+                break;
+            }
+
+            size += 1;
+            offset += 1;
+        }
+
+        Ok(size)
     }
 
     pub fn iter_find_section<F>(&self, mut closure: F) -> Option<Section<'_>>

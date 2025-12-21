@@ -1,6 +1,7 @@
 use std::mem::{self, offset_of};
 
-use crate::pe64::{PE64, data_directory::import, headers::{IMAGE_DIRECTORY_ENTRY_IMPORT, IMAGE_IMPORT_BY_NAME, IMAGE_IMPORT_DESCRIPTOR, IMAGE_ORDINAL_FLAG64, IMAGE_THUNK_DATA64}};
+use crate::psm_error::PSMError;
+use crate::{pe64::{PE64, headers::{IMAGE_DIRECTORY_ENTRY_IMPORT, IMAGE_IMPORT_BY_NAME, IMAGE_IMPORT_DESCRIPTOR, IMAGE_ORDINAL_FLAG64, IMAGE_THUNK_DATA64}}};
 
 pub struct Imports {
     pub dir_rva: usize,
@@ -11,7 +12,6 @@ pub struct Imports {
 pub struct DllImport {
     pub base: usize,
     pub name: String,
-    pub pe: PE64,
 }
 
 pub struct ImportDirectory {
@@ -28,30 +28,12 @@ pub struct ThunkData {
 }
 
 impl ImportDirectory {
-    fn get_string_size(pe64: &PE64, rva: usize) -> Option<usize> {
-        let mut offset = pe64.rva_to_offset(rva)?;
-
-        let mut size = 1; // start with 1 to account for null terminator
-        
-        while offset < pe64._raw.len() {
-            let byte = pe64._raw.get(offset)?;
-            if *byte == 0 {
-                break;
-            }
-
-            size += 1;
-            offset += 1;
-        }
-
-        Some(size)
-    }
-
-    pub fn get_imports(pe64: &PE64) -> Option<Imports> {
+    pub fn get_imports(pe64: &PE64) -> Result<Option<Imports>, PSMError> {
         let optional_header = &pe64.nt64().OptionalHeader;
         let import_directory = &optional_header.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT as usize];
 
         if import_directory.VirtualAddress == 0 || import_directory.Size == 0 {
-            return None;
+            return Ok(None);
         }
 
         let import_dir_rva = import_directory.VirtualAddress as usize;
@@ -71,17 +53,16 @@ impl ImportDirectory {
                 thunks: Vec::new(),
             };
 
-            let entry: Option<&IMAGE_IMPORT_DESCRIPTOR> = pe64.get_ref_from_rva(import_dir_rva + i * std::mem::size_of::<IMAGE_IMPORT_DESCRIPTOR>());
+            let entry: Option<&IMAGE_IMPORT_DESCRIPTOR> = pe64.get_ref_from_rva(import_dir_rva + i * std::mem::size_of::<IMAGE_IMPORT_DESCRIPTOR>()).ok();
 
             if let Some(entry) = entry {
                 if entry.Name != 0 {
-                    if let Some(size) = Self::get_string_size(pe64, entry.Name as usize) {
-                        import_directory.dll_name_rva_and_size = Some((entry.Name as usize, size));
-                    }
+                    let size = pe64.get_string_size(entry.Name as usize)?;
+                    import_directory.dll_name_rva_and_size = Some((entry.Name as usize, size));
                 }
 
                 let mut original_thunk_rva = entry.OriginalFirstThunk as usize;
-                let original_thunk: Option<&IMAGE_THUNK_DATA64> = pe64.get_ref_from_rva(original_thunk_rva);
+                let original_thunk: Option<&IMAGE_THUNK_DATA64> = pe64.get_ref_from_rva(original_thunk_rva).ok();
                 let mut count = 0;
 
                 if let Some(mut original_thunk) = original_thunk {
@@ -99,10 +80,9 @@ impl ImportDirectory {
                                 let import_by_name_rva = *original_thunk as usize;
                                 let mut import_size = mem::size_of::<u16>(); // Hint is u16
 
-                                if let Some(mut size) = Self::get_string_size(pe64, import_by_name_rva + offset_of!(IMAGE_IMPORT_BY_NAME, Name)) {
-                                    size = size.max(2); // at least 2 bytes for the name for alignment
-                                    import_size += size; // add size of name
-                                }
+                                let mut size = pe64.get_string_size(import_by_name_rva + offset_of!(IMAGE_IMPORT_BY_NAME, Name))?;
+                                size = size.max(2); // at least 2 bytes for the name for alignment
+                                import_size += size; // add size of name
 
                                 thunk_data.name_rva_and_size = Some((import_by_name_rva, import_size));
                             } else {
@@ -122,7 +102,7 @@ impl ImportDirectory {
             imports.directories.push(import_directory);
         }
 
-        Some(imports)
+        Ok(Some(imports))
     }
 }
 
@@ -132,7 +112,6 @@ impl DllImport {
             Self {
                 base,
                 name: std::path::Path::new(path).file_name()?.to_str()?.to_string(),
-                pe: PE64::new(path).ok()?,
             }
         )
     }

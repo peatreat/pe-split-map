@@ -5,6 +5,7 @@ pub const IMAGE_DIRECTORY_ENTRY_BASERELOC: usize = 5;
 pub const IMAGE_REL_BASED_DIR64: u8 = 10;
 
 use crate::pe64::PE64;
+use crate::psm_error::PSMError;
 
 pub struct RelocDirectory;
 
@@ -21,16 +22,16 @@ pub struct IMAGE_BASE_RELOCATION {
 }
 
 impl RelocDirectory {
-    pub fn get_reloc_symbols(pe64: &PE64) -> Option<Vec<RelocSymbol>> {
+    pub fn get_reloc_symbols(pe64: &PE64) -> Result<Option<Vec<RelocSymbol>>, PSMError> {
         let optional_header = &pe64.nt64().OptionalHeader;
         let reloc_data_directory = &optional_header.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC as usize];
 
         if reloc_data_directory.VirtualAddress == 0 || reloc_data_directory.Size == 0 {
-            return None;
+            return Ok(None);
         }
 
         let mut base_reloc_va = reloc_data_directory.VirtualAddress as usize;
-        let mut base_reloc_entry = pe64.get_ref_from_rva::<IMAGE_BASE_RELOCATION>(base_reloc_va);
+        let mut base_reloc_entry = pe64.get_ref_from_rva::<IMAGE_BASE_RELOCATION>(base_reloc_va).ok();
 
         let mut symbols = Vec::new();
 
@@ -69,9 +70,9 @@ impl RelocDirectory {
             }
 
             base_reloc_va += entry.SizeOfBlock as usize;
-            base_reloc_entry = pe64.get_ref_from_rva::<IMAGE_BASE_RELOCATION>(base_reloc_va);
+            base_reloc_entry = pe64.get_ref_from_rva::<IMAGE_BASE_RELOCATION>(base_reloc_va).ok();
         }
 
-        Some(symbols)
+        Ok(Some(symbols))
     }
 }

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use crate::pe64::{PE64, headers::{IMAGE_DIRECTORY_ENTRY_EXPORT, IMAGE_EXPORT_DIRECTORY}};
+use crate::{pe64::{PE64, headers::{IMAGE_DIRECTORY_ENTRY_EXPORT, IMAGE_EXPORT_DIRECTORY}}};
+use crate::psm_error::PSMError;
 
 pub struct ExportDirectory {
     pub rva: usize,
@@ -30,15 +31,15 @@ impl ExportDirectory {
         None
     }
 
-    pub fn get_export_directory(pe64: &PE64) -> Option<Self> {
+    pub fn get_export_directory(pe64: &PE64) -> Result<Option<Self>, PSMError> {
         let optional_header = &pe64.nt64().OptionalHeader;
         let export_data_directory = &optional_header.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT as usize];
 
         if export_data_directory.VirtualAddress == 0 || export_data_directory.Size == 0 {
-            return None;
+            return Ok(None);
         }
 
-        let entry: Option<&IMAGE_EXPORT_DIRECTORY> = pe64.get_ref_from_rva(export_data_directory.VirtualAddress as usize);
+        let entry: Option<&IMAGE_EXPORT_DIRECTORY> = pe64.get_ref_from_rva(export_data_directory.VirtualAddress as usize).ok();
 
         if let Some(entry) = entry {
             let mut export_dir = ExportDirectory {
@@ -51,14 +52,10 @@ impl ExportDirectory {
 
             for i in 0..entry.NumberOfNames {
                 let name_rva = pe64.get_ref_from_rva::<u32>((entry.AddressOfNames as usize) + (i * 4) as usize)?;
-                let name_offset = pe64.rva_to_offset(*name_rva as usize)?;
 
-                let mut size = 0;
-                while pe64._raw[name_offset + size] != 0 {
-                    size += 1;
-                }
+                let size = pe64.get_string_size(*name_rva as usize)?.saturating_sub(1);
 
-                let name = String::from_utf8(pe64._raw[name_offset..name_offset + size].to_vec()).ok()?;
+                let name = String::from_utf8(pe64.get_data_from_rva(*name_rva as usize, size)?.to_vec())?;
                 let ordinal = pe64.get_ref_from_rva::<u16>((entry.AddressOfNameOrdinals as usize) + (i * 2) as usize)?;
 
                 export_dir.name_ordinals.push((*ordinal, name));
@@ -66,9 +63,9 @@ impl ExportDirectory {
 
             export_dir.functions = unsafe { std::slice::from_raw_parts(pe64.get_ref_from_rva(entry.AddressOfFunctions as usize)? as *const u32, entry.NumberOfFunctions as usize).to_vec()};
 
-            return Some(export_dir);
+            return Ok(Some(export_dir));
         }
 
-        None
+        Ok(None)
     }
 }

@@ -1,3 +1,5 @@
+use crate::psm_error::{PSMError, Result};
+
 pub struct Heap {
     pages: Vec<HeapPage>,
 }
@@ -16,24 +18,24 @@ impl Heap {
         self.pages.push(HeapPage::new(base, end));
     }
 
-    pub fn reserve(&mut self, size: u64, alignment: u64) -> Option<u64> {
+    pub fn reserve(&mut self, size: u64, alignment: u64) -> Result<u64> {
         for page in &mut self.pages {
             if let Some(addr) = page.reserve(size, alignment) {
-                return Some(addr);
+                return Ok(addr);
             }
         }
 
-        None
+        Err(PSMError::ReserveError(size, alignment))
     }
 
-    pub fn reserve_with_same_alignment(&mut self, prev_va: u64, size: u64, max_alignment: Option<u64>) -> Option<u64> {
+    pub fn reserve_with_same_alignment(&mut self, prev_va: u64, size: u64, max_alignment: Option<u64>) -> Result<u64> {
         for page in &mut self.pages {
             if let Some(addr) = page.reserve_with_same_alignment(prev_va, size, max_alignment) {
-                return Some(addr);
+                return Ok(addr);
             }
         }
 
-        None
+        Err(PSMError::ReserveError(size, HeapPage::get_max_alignment(prev_va).min(max_alignment.unwrap_or(0))))
     }
 }
 

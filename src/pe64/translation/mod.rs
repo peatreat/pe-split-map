@@ -10,7 +10,7 @@ pub use relative::RelativeTranslation;
 pub use control::ControlTranslation;
 pub use jcc::JCCTranslation;
 
-use crate::pe64::{mapper::{MappedBlock, Mapper}, translation::near::NearTranslation};
+use crate::{psm_error::PSMError, pe64::{mapper::{MappedBlock, Mapper}, translation::near::NearTranslation}};
 
 pub enum Translation {
     Default(DefaultTranslation),
@@ -107,20 +107,21 @@ impl Translation {
         return first_occurrence;
     }
 
-    pub fn get_rel_offset_near(target_address: u64, next_ip: u64) -> Option<i32> {
+    pub fn get_rel_offset_near(target_address: u64, next_ip: u64) -> Result<i32, PSMError> {
         let rel_offset = target_address.wrapping_sub(next_ip);
         let is_valid = (rel_offset as i64) >= (i32::MIN as i64) && (rel_offset as i64) <= (i32::MAX as i64);
 
-        is_valid.then_some(rel_offset as i32)
+        is_valid.then_some(rel_offset as i32).ok_or(PSMError::BadRelativeOffset(next_ip, target_address, rel_offset))
     }
 
-    pub fn translate_rva_to_mapped(translations: &[Self], symbols: &[(std::ops::Range<usize>, MappedBlock)], rva_to_find: u64) -> Option<u64> {
+    pub fn translate_rva_to_mapped(translations: &[Self], symbols: &[(std::ops::Range<usize>, MappedBlock)], rva_to_find: u64) -> Result<u64, PSMError> {
         Translation::find_first_translation_rva(translations, rva_to_find)
             .and_then(|translation| Some(translation.mapped()))
             .or(
                 Mapper::find_symbol_by_rva(symbols, rva_to_find as usize)
                 .map(|(rva_range, mapped_block)| mapped_block.address + (rva_to_find as usize - rva_range.start) as u64)
             )
+            .ok_or(PSMError::TranslationFail(rva_to_find))
     }
 }
 
