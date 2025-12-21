@@ -1,8 +1,6 @@
 use std::mem;
 
-use pelite::image::{IMAGE_DEBUG_DIRECTORY, IMAGE_DIRECTORY_ENTRY_DEBUG};
-
-use crate::pe64::PE64;
+use crate::pe64::{PE64, headers::{IMAGE_DEBUG_DIRECTORY, IMAGE_DIRECTORY_ENTRY_DEBUG}};
 
 pub struct DebugDirectory {
     pub dir_rva: usize,

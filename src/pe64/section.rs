@@ -1,6 +1,6 @@
 use std::slice;
 
-use pelite::image::{IMAGE_SCN_MEM_EXECUTE, IMAGE_SECTION_HEADER};
+use crate::pe64::headers::{IMAGE_SCN_MEM_EXECUTE, IMAGE_SECTION_HEADER};
 
 pub struct Section<'a> {
     pub _raw: &'a [u8],

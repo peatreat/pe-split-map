@@ -1,16 +1,6 @@
 use std::mem::{self, offset_of};
 
-use pelite::{image::{IMAGE_DIRECTORY_ENTRY_IMPORT, IMAGE_IMPORT_DESCRIPTOR}, pe::image::IMAGE_ORDINAL_FLAG};
-
-use crate::pe64::{PE64, data_directory::import};
-
-type IMAGE_THUNK_DATA64 = u64;
-
-#[repr(C)]
-struct IMAGE_IMPORT_BY_NAME {
-    pub Hint: u16,
-    pub Name: [u8; 1],
-}
+use crate::pe64::{PE64, data_directory::import, headers::{IMAGE_DIRECTORY_ENTRY_IMPORT, IMAGE_IMPORT_BY_NAME, IMAGE_IMPORT_DESCRIPTOR, IMAGE_ORDINAL_FLAG64, IMAGE_THUNK_DATA64}};
 
 pub struct Imports {
     pub dir_rva: usize,
@@ -105,7 +95,7 @@ impl ImportDirectory {
                                 name_rva_and_size: None,
                             };
 
-                            if *original_thunk & IMAGE_ORDINAL_FLAG == 0 { // import by name
+                            if *original_thunk & IMAGE_ORDINAL_FLAG64 == 0 { // import by name
                                 let import_by_name_rva = *original_thunk as usize;
                                 let mut import_size = mem::size_of::<u16>(); // Hint is u16
 

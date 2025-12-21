@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 
-use pelite::image::{IMAGE_DIRECTORY_ENTRY_EXPORT, IMAGE_EXPORT_DIRECTORY};
-
-use crate::pe64::PE64;
+use crate::pe64::{PE64, headers::{IMAGE_DIRECTORY_ENTRY_EXPORT, IMAGE_EXPORT_DIRECTORY}};
 
 pub struct ExportDirectory {
     pub rva: usize,

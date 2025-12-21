@@ -1,7 +1,8 @@
 use core::num;
 use std::mem;
 
-use pelite::image::{IMAGE_BASE_RELOCATION, IMAGE_DIRECTORY_ENTRY_BASERELOC, IMAGE_REL_BASED_DIR64};
+pub const IMAGE_DIRECTORY_ENTRY_BASERELOC: usize = 5;
+pub const IMAGE_REL_BASED_DIR64: u8 = 10;
 
 use crate::pe64::PE64;
 
@@ -11,6 +12,12 @@ pub struct RelocDirectory;
 pub struct RelocSymbol {
     pub rva: usize,
     pub size: Option<usize>,
+}
+
+#[repr(C)]
+pub struct IMAGE_BASE_RELOCATION {
+    pub VirtualAddress: u32,
+    pub SizeOfBlock: u32,
 }
 
 impl RelocDirectory {
