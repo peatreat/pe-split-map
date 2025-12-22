@@ -28,14 +28,14 @@ impl Heap {
         Err(PSMError::ReserveError(size, alignment))
     }
 
-    pub fn reserve_with_same_alignment(&mut self, prev_va: u64, size: u64, max_alignment: Option<u64>) -> Result<u64> {
+    pub fn reserve_with_same_alignment(&mut self, prev_va: u64, size: u64, max_alignment: u64) -> Result<u64> {
         for page in &mut self.pages {
             if let Some(addr) = page.reserve_with_same_alignment(prev_va, size, max_alignment) {
                 return Ok(addr);
             }
         }
 
-        Err(PSMError::ReserveError(size, HeapPage::get_max_alignment(prev_va).min(max_alignment.unwrap_or(0))))
+        Err(PSMError::ReserveError(size, HeapPage::get_max_alignment(prev_va).min(max_alignment)))
     }
 }
 
@@ -63,18 +63,16 @@ impl HeapPage {
         }
     }
 
-    pub fn reserve_with_same_alignment(&mut self, prev_va: u64, size: u64, max_alignment: Option<u64>) -> Option<u64> {
-        let alignment = Self::get_max_alignment(prev_va).min(max_alignment.unwrap_or(0));
-
+    pub fn reserve_with_same_alignment(&mut self, prev_va: u64, size: u64, max_alignment: u64) -> Option<u64> {
         let mut aligned_base = self.base;
 
-        let offset = aligned_base & (alignment - 1);
-        let original_offset = prev_va & (alignment - 1);
+        let offset = aligned_base & (max_alignment - 1);
+        let original_offset = prev_va & (max_alignment - 1);
 
         if original_offset > offset {
             aligned_base += original_offset - offset;
         } else if offset > original_offset {
-            aligned_base += alignment - (offset - original_offset);
+            aligned_base += max_alignment - (offset - original_offset);
         }
 
         if aligned_base + size > self.end {

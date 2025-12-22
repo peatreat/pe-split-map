@@ -75,7 +75,7 @@ impl Mapper {
         for (rva_range, mapped_block) in &mut symbols_shuffled {
             let symbol_size = (rva_range.end - rva_range.start) as usize;
 
-            mapped_block.address = heap.reserve_with_same_alignment(rva_range.start as u64, (rva_range.end - rva_range.start) as u64, Some(32))?;
+            mapped_block.address = heap.reserve_with_same_alignment(rva_range.start as u64, (rva_range.end - rva_range.start) as u64, 32)?;
 
             mapped_block.data = pe.get_data_from_rva(rva_range.start, symbol_size)
             .and_then(|slice| Ok(slice.to_vec()))
