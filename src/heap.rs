@@ -45,7 +45,7 @@ impl HeapPage {
     }
 
     fn get_max_alignment(va: u64) -> u64 {
-        if (va == 0) {
+        if va == 0 {
             return 0;
         }
 
@@ -65,6 +65,23 @@ impl HeapPage {
 
     pub fn reserve_with_same_alignment(&mut self, prev_va: u64, size: u64, max_alignment: Option<u64>) -> Option<u64> {
         let alignment = Self::get_max_alignment(prev_va).min(max_alignment.unwrap_or(0));
-        self.reserve(size, alignment)
+
+        let mut aligned_base = self.base;
+
+        let offset = aligned_base & (alignment - 1);
+        let original_offset = prev_va & (alignment - 1);
+
+        if original_offset > offset {
+            aligned_base += original_offset - offset;
+        } else if offset > original_offset {
+            aligned_base += alignment - (offset - original_offset);
+        }
+
+        if aligned_base + size > self.end {
+            None
+        } else {
+            self.base = aligned_base + size;
+            Some(aligned_base)
+        }
     }
 }
