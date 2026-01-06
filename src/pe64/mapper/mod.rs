@@ -1,7 +1,6 @@
-use iced_x86::{Decoder, code_asm::bl};
 use rand::seq::SliceRandom;
 
-use crate::{psm_error::{PSMError, Result}, heap::{self, Heap}, pe64::{PE64, data_directory::{DllImport, ExportDirectory, ImportDirectory, RelocDirectory}, symbols::Symbol, translation::{Translation, block::TranslationBlock}}};
+use crate::{psm_error::{PSMError, Result}, heap::Heap, pe64::{PE64, data_directory::{DllImport, ExportDirectory, ImportDirectory, RelocDirectory}, symbols::Symbol, translation::{Translation, block::TranslationBlock}}};
 
 pub struct Mapper;
 
@@ -85,7 +84,7 @@ impl Mapper {
         Ok(symbols)
     }
 
-    pub fn map(pe: &PE64, dll_imports: &[DllImport], code_heap: &mut Heap, symbol_heap: &mut Heap, translations: &mut [Translation], symbols: &[(usize, Symbol)], block_size: TranslationBlockSize, assume_jumps_are_near: bool) -> Result<Mapped> {
+    pub fn map(pe: &PE64, dll_imports: &[DllImport], code_heap: &mut Heap, symbol_heap: &mut Heap, translations: &mut [Translation], symbols: &[(usize, Symbol)], block_size: TranslationBlockSize, assume_near: bool) -> Result<Mapped> {
         // map symbols
         let mut symbols = Mapper::map_symbols(pe, symbol_heap, symbols)?;
 
@@ -99,7 +98,7 @@ impl Mapper {
 
             match block_size {
                 TranslationBlockSize::MaxByteSize(size) => {
-                    if current_block.byte_size(translations, assume_jumps_are_near)? >= size {
+                    if current_block.byte_size(translations, assume_near)? >= size {
                         blocks.push(current_block);
                         current_block = TranslationBlock::new();
                     }
@@ -123,7 +122,7 @@ impl Mapper {
         blocks_shuffled.shuffle(&mut rng);
 
         for block in &mut blocks_shuffled {
-            block.reserve(translations, code_heap, 0x10, assume_jumps_are_near)?;
+            block.reserve(translations, code_heap, 0x10, assume_near)?;
         }
 
         // resolve blocks
@@ -155,9 +154,7 @@ impl Mapper {
                 if let Some(dll_name) = import_dir.dll_name_rva_and_size
                     .and_then(|(name_rva, size)| pe.get_data_from_rva(name_rva, size).ok())
                     .and_then(|dll_name_slice| String::from_utf8(dll_name_slice[..dll_name_slice.len() - 1].to_vec()).ok())
-                { 
-                    println!("dll: {}", dll_name);
-
+                {
                     let dll_import = dll_imports.iter().find(|dll_import| dll_import.name.eq_ignore_ascii_case(&dll_name)).ok_or(PSMError::ImportDLLNotFound(dll_name.to_owned()))?;
 
                     let exports = ExportDirectory::get_export_directory(&PE64::new(&dll_import.path)?)?.ok_or(PSMError::ImportHasNoExports(dll_name.to_owned()))?;
@@ -198,7 +195,7 @@ impl Mapper {
         for (index, block) in blocks.iter().enumerate() {
             mapped_blocks.push(MappedBlock {
                 address: block.address(translations)?,
-                data: block.buffer(translations, assume_jumps_are_near, blocks.get(index + 1))?,
+                data: block.buffer(translations, assume_near, blocks.get(index + 1))?,
             });
         }
 

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::{pe64::{PE64, headers::{IMAGE_DIRECTORY_ENTRY_EXPORT, IMAGE_EXPORT_DIRECTORY}}};
 use crate::psm_error::PSMError;
 

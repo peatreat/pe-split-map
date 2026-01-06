@@ -1,7 +1,5 @@
 use iced_x86::Encoder;
 
-use super::Translation;
-
 #[derive(Clone)]
 pub struct ControlTranslation {
     mapped_va: u64,
@@ -35,14 +33,11 @@ impl ControlTranslation {
         &mut self.mapped_va
     }
     
-    pub fn buffer(&self, assume_jumps_are_near: bool) -> Result<Vec<u8>, iced_x86::IcedError> {
+    pub fn buffer(&self) -> Result<Vec<u8>, iced_x86::IcedError> {
         let mut encoder = Encoder::new(64);
 
         encoder.encode(&self.mov_instruction, self.mov_instruction.ip())?;
         encoder.encode(&self.control_instruction, self.control_instruction.ip())?;
-        
-        //println!("{}", &self.mov_instruction);
-        //println!("{}", &self.control_instruction);
 
         Ok(encoder.take_buffer())
     }

@@ -1,7 +1,5 @@
 use iced_x86::Encoder;
 
-use super::Translation;
-
 pub struct NearTranslation {
     mapped_va: u64,
     pub instruction: iced_x86::Instruction,

@@ -1,4 +1,3 @@
-use core::num;
 use std::mem;
 
 pub const IMAGE_DIRECTORY_ENTRY_BASERELOC: usize = 5;

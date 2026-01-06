@@ -1,5 +1,4 @@
 pub mod relative;
-pub mod raw;
 pub mod control;
 pub mod jcc;
 pub mod block;
@@ -25,11 +24,11 @@ impl Translation {
         self.instruction().ip()
     }
     
-    pub fn buffer(&self, assume_jumps_are_near: bool) -> Result<Vec<u8>, iced_x86::IcedError> {
+    pub fn buffer(&self, assume_near: bool) -> Result<Vec<u8>, iced_x86::IcedError> {
         match self {
             Translation::Default(default_translation) => default_translation.buffer(),
-            Translation::Jcc(jcc_translation) => jcc_translation.buffer(assume_jumps_are_near),
-            Translation::Control(control_translation) => control_translation.buffer(assume_jumps_are_near),
+            Translation::Jcc(jcc_translation) => jcc_translation.buffer(assume_near),
+            Translation::Control(control_translation) => control_translation.buffer(),
             Translation::Relative(relative_translation) => relative_translation.buffer(),
             Translation::Near(near_translation) => near_translation.buffer(),
         }
@@ -37,7 +36,7 @@ impl Translation {
 
     pub fn resolve(&mut self, rel_op_ip: u64) {
         match self {
-            Translation::Default(default_translation) => default_translation.resolve(rel_op_ip),
+            Translation::Default(default_translation) => default_translation.resolve(),
             Translation::Jcc(jcc_translation) => jcc_translation.resolve(rel_op_ip),
             Translation::Control(control_translation) => control_translation.resolve(rel_op_ip),
             Translation::Relative(relative_translation) => relative_translation.resolve(rel_op_ip),
@@ -136,7 +135,7 @@ impl DefaultTranslation {
         Self { mapped_va: 0, instruction }
     }
 
-    pub fn resolve(&mut self, rel_op_ip: u64) {}
+    pub fn resolve(&mut self) {}
 
     pub fn rel_op_rva(&self) -> Option<u64> {
         None
@@ -156,7 +155,6 @@ impl DefaultTranslation {
     
     pub fn buffer(&self) -> Result<Vec<u8>, iced_x86::IcedError> {
         let mut encoder = Encoder::new(64);
-        //println!("{}", &self.instruction);
         encoder.encode(&self.instruction, self.instruction.ip())?;
         Ok(encoder.take_buffer())
     }

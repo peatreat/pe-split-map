@@ -5,7 +5,7 @@ use iced_x86::Decoder;
 use crate::psm_error::PSMError;
 
 use super::PE64;
-use super::data_directory::{DebugDirectory, ExceptionDirectory, ExportDirectory, ImportDirectory, RelocDirectory, reloc};
+use super::data_directory::{DebugDirectory, ExceptionDirectory, ExportDirectory, ImportDirectory, RelocDirectory};
 
 #[derive(Copy, Clone)]
 pub struct Symbol {
@@ -55,18 +55,13 @@ pub fn split_symbols(pe: &PE64) -> Result<Vec<(usize, Symbol)>, PSMError> {
     let mut symbols: HashMap<usize, Symbol> = HashMap::new();
 
     pe.iter_find_section(|section| {
-        println!("section: {}, raw size: {:p}, virt size: {:p}", section.name, section._raw.len() as *const usize, section.virtual_size as *const usize);
-
         if section.is_executable() {
             let mut decoder = Decoder::new(64, section._raw, iced_x86::DecoderOptions::NONE);
-
-            //decoder.set_ip(pe.image_base() + section.virtual_address as u64);
 
             while decoder.can_decode() {
                 let instruction = decoder.decode();
 
                 if instruction.is_ip_rel_memory_operand() {
-                    println!("{:p} | {:p}", instruction.ip() as *const usize, instruction.ip_rel_memory_address() as *const usize);
                     let operand_section = pe.iter_find_section(|s| s.contains_rva(section.virtual_address + instruction.ip_rel_memory_address() as usize));
                     
                     if let Some(operand_section) = operand_section {
@@ -88,7 +83,6 @@ pub fn split_symbols(pe: &PE64) -> Result<Vec<(usize, Symbol)>, PSMError> {
                             false,
                         );
                     }
-                    //println!("instruction: {} | rva: {:p} | symbol rva: {:p} | size: {:?}", instruction, (section.virtual_address as u64 + instruction.ip()) as *const usize, (section.virtual_address as u64 + instruction.ip_rel_memory_address()) as *const usize, instruction.memory_size().size());
                 }
             }
 
@@ -116,9 +110,6 @@ pub fn split_symbols(pe: &PE64) -> Result<Vec<(usize, Symbol)>, PSMError> {
             true,
             true,
         );
-
-        //println!("debug dir rva: {:p} | size: 0x{:X} ", (debug_dir.dir_rva as *const usize), debug_dir.dir_size);
-        //println!("debug data rva: {:p} | size: 0x{:X} ", (debug_dir.data_rva as *const usize), debug_dir.data_size);
     });
 
     ExceptionDirectory::get_unwind_blocks(&pe).iter().for_each(|unwind_block| {
@@ -130,8 +121,6 @@ pub fn split_symbols(pe: &PE64) -> Result<Vec<(usize, Symbol)>, PSMError> {
             true,
             true,
         );
-
-        //println!("unwind block rva: {:p} | size: 0x{:X} ", (unwind_block.rva as *const usize), unwind_block.size);
     });
 
     if let Some(export_dir) = ExportDirectory::get_export_directory(&pe)? {
@@ -143,8 +132,6 @@ pub fn split_symbols(pe: &PE64) -> Result<Vec<(usize, Symbol)>, PSMError> {
             true,
             true,
         );
-
-        println!("export dir rva: {:p} | size: 0x{:X} ", (export_dir.rva as *const usize), export_dir.size);
     };
 
     if let Some(imports) = ImportDirectory::get_imports(&pe)? {
@@ -157,8 +144,6 @@ pub fn split_symbols(pe: &PE64) -> Result<Vec<(usize, Symbol)>, PSMError> {
             true,
         );
 
-        println!("import dir rva: {:p} | size: 0x{:X} ", (imports.dir_rva as *const usize), imports.dir_size);
-
         for import_dir in imports.directories {
             if let Some((dll_name_rva, dll_name_size)) = import_dir.dll_name_rva_and_size {
                 Symbol::update_or_insert(
@@ -169,8 +154,6 @@ pub fn split_symbols(pe: &PE64) -> Result<Vec<(usize, Symbol)>, PSMError> {
                     true,
                     true,
                 );
-
-                println!("import dll name rva: {:p} | size: 0x{:X} ", (dll_name_rva as *const usize), dll_name_size);
             }
 
             import_dir.thunks.iter().for_each(|thunk| {
@@ -182,8 +165,6 @@ pub fn split_symbols(pe: &PE64) -> Result<Vec<(usize, Symbol)>, PSMError> {
                     true,
                     false,
                 );
-                
-                println!("import thunk rva: {:p} | size: 0x{:X} ", (thunk.rva as *const usize), thunk.size);
 
                 if let Some((name_rva, name_size)) = thunk.name_rva_and_size {
                     Symbol::update_or_insert(
@@ -194,8 +175,6 @@ pub fn split_symbols(pe: &PE64) -> Result<Vec<(usize, Symbol)>, PSMError> {
                         true,
                         true,
                     );
-
-                    println!("import thunk name rva: {:p} | size: 0x{:X} ", (name_rva as *const usize), name_size);
                 }
             });
         }
@@ -246,8 +225,6 @@ pub fn split_symbols(pe: &PE64) -> Result<Vec<(usize, Symbol)>, PSMError> {
                     true,
                     false,
                 );
-
-                println!("reloc symbol rva: {:p} | size: {:?}", (reloc_symbol.rva as *const usize), reloc_symbol.size);
             }
         }
     }
@@ -325,18 +302,13 @@ pub fn split_symbols(pe: &PE64) -> Result<Vec<(usize, Symbol)>, PSMError> {
                 let (next_rva, next_symbol) = merged_symbols[j];
                 let next_sym_section = pe.iter_find_section(|s| s.contains_rva(next_rva)).unwrap();
 
-                if !next_symbol.is_ptr_reference && !next_symbol.is_directory_symbol && symbol_section.virtual_address == next_sym_section.virtual_address /* && next_rva == rva + combined_size*/ {
-                    //combined_size = next_symbol.max_operation_size as usize;
-                    if (!next_symbol.should_ignore) {
+                if !next_symbol.is_ptr_reference && !next_symbol.is_directory_symbol && symbol_section.virtual_address == next_sym_section.virtual_address {
+                    if !next_symbol.should_ignore {
                         should_ignore = false;
                     }
 
                     j += 1;
                 }
-                /*else if next_symbol.is_ptr_reference {
-                    combined_size += next_rva - (rva + combined_size);
-                    break;
-                }*/
                 else {
                     combined_size = (next_rva - rva).min(symbol_section.virtual_address + symbol_section.virtual_size - rva);
                     break;
@@ -362,10 +334,6 @@ pub fn split_symbols(pe: &PE64) -> Result<Vec<(usize, Symbol)>, PSMError> {
             i += 1;
         }
     }
-
-    //for (rva, symbol) in final_symbols {
-    //    //println!("symbol rva: {:p} | end rva: {:p}", (rva as *const usize), (rva + symbol.max_operation_size as usize) as *const usize);
-    //}
 
     Ok(final_symbols)
 }

@@ -1,6 +1,4 @@
-use iced_x86::{Encoder, IcedError, MemoryOperand, code_asm::tr};
-
-use crate::{psm_error::{PSMError, Result}, heap::Heap, pe64::{mapper::{MappedBlock, Mapper}, translation::{self, Translation}}};
+use crate::{psm_error::{PSMError, Result}, heap::Heap, pe64::{mapper::MappedBlock, translation::Translation}};
 
 pub struct TranslationBlock {
     translations: Vec<usize>
@@ -29,19 +27,19 @@ impl TranslationBlock {
             .ok_or(PSMError::EmptyTranslationBlock)
     }
 
-    pub fn buffer(&self, all_translations: &mut [Translation], assume_jumps_are_near: bool, next_block: Option<&TranslationBlock>) -> Result<Vec<u8>> {
+    pub fn buffer(&self, all_translations: &mut [Translation], assume_near: bool, next_block: Option<&TranslationBlock>) -> Result<Vec<u8>> {
         let mut data: Vec<u8> = Vec::new();
 
         for index in &self.translations {
-            data.extend_from_slice(&all_translations[*index].buffer(assume_jumps_are_near)?);
+            data.extend_from_slice(&all_translations[*index].buffer(assume_near)?);
         }
 
         if let Some(next_block_address) = next_block.and_then(|block| block.address(all_translations).ok()) {
-            if assume_jumps_are_near {
+            if assume_near {
                 let mut jmp_buffer = [0u8; 5];
                 jmp_buffer[0] = 0xE9;
 
-                let next_rip = self.address(all_translations)? + self.byte_size(all_translations, assume_jumps_are_near)?;
+                let next_rip = self.address(all_translations)? + self.byte_size(all_translations, assume_near)?;
 
                 let rel_offset = Translation::get_rel_offset_near(next_block_address, next_rip)?;
                 
@@ -60,10 +58,10 @@ impl TranslationBlock {
         Ok(data)
     }
 
-    pub fn byte_size(&self, all_translations: &mut [Translation], assume_jumps_are_near: bool) -> Result<u64> {
+    pub fn byte_size(&self, all_translations: &mut [Translation], assume_near: bool) -> Result<u64> {
         let mut total_size: u64 = self.translations.iter()
             .map(|t| 
-                all_translations[*t].buffer(assume_jumps_are_near)
+                all_translations[*t].buffer(assume_near)
                 .and_then(|buffer| Ok(buffer.len() as u64))
                 .map_err(PSMError::from)
             )
@@ -71,13 +69,13 @@ impl TranslationBlock {
             .iter().sum();
         
         // add extra space for abs jump to next block
-        total_size += if assume_jumps_are_near { 5 } else { 14 };
+        total_size += if assume_near { 5 } else { 14 };
 
         Ok(total_size)
     }
 
-    pub fn reserve(&mut self, all_translations: &mut [Translation], heap: &mut Heap, alignment: u64, assume_jumps_are_near: bool) -> Result<()> {
-        let total_size = self.byte_size(all_translations, assume_jumps_are_near)?;
+    pub fn reserve(&mut self, all_translations: &mut [Translation], heap: &mut Heap, alignment: u64, assume_near: bool) -> Result<()> {
+        let total_size = self.byte_size(all_translations, assume_near)?;
 
         let reserved_va = heap.reserve(total_size as u64, alignment)?;
         let mut offset = 0u64;
@@ -85,7 +83,7 @@ impl TranslationBlock {
         for index in &self.translations {
             let translation = &mut all_translations[*index];
             *translation.mapped_mut() = reserved_va + offset;
-            offset += translation.buffer(assume_jumps_are_near)?.len() as u64;
+            offset += translation.buffer(assume_near)?.len() as u64;
         }
 
         Ok(())

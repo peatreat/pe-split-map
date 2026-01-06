@@ -1,7 +1,5 @@
 use iced_x86::{Code, Encoder, Instruction, MemoryOperand, Register};
 
-use super::Translation;
-
 #[derive(Clone)]
 pub struct JCCTranslation {
     pub mapped_va: u64,
@@ -10,7 +8,7 @@ pub struct JCCTranslation {
 }
 
 impl JCCTranslation {
-    pub fn new(mut jcc_instruction: iced_x86::Instruction) -> Result<Self, iced_x86::IcedError> {
+    pub fn new(jcc_instruction: iced_x86::Instruction) -> Result<Self, iced_x86::IcedError> {
         let branch_target = jcc_instruction.near_branch64();
 
         Ok (
@@ -50,12 +48,12 @@ impl JCCTranslation {
         &mut self.mapped_va
     }
     
-    pub fn buffer(&self, assume_jumps_are_near: bool) -> Result<Vec<u8>, iced_x86::IcedError> {
+    pub fn buffer(&self, assume_near: bool) -> Result<Vec<u8>, iced_x86::IcedError> {
         let mut encoder = Encoder::new(64);
 
         let mut jcc_instr = self.jcc_instruction.clone();
 
-        if assume_jumps_are_near {
+        if assume_near {
             jcc_instr.as_near_branch();
             jcc_instr.set_near_branch64(self.branch_target);
             encoder.encode(&jcc_instr, self.mapped())?;
@@ -85,10 +83,6 @@ impl JCCTranslation {
             encoder.encode(&skip_instruction, skip_instruction.ip())?;
             encoder.encode(&branch_instruction, branch_instruction.ip())?;
         }
-
-        //println!("{}", &jcc_instr);
-        //println!("{}", &skip_instruction);
-        //println!("{}", &branch_instruction);
         
         Ok (
             [ encoder.take_buffer(), self.branch_target.to_le_bytes().to_vec() ].concat()
